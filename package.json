@@ -1,6 +1,6 @@
 {
   "name": "commit-generator-zh-cn",
-  "displayName": "提交信息生成器",
+  "displayName": "commit-generator-zh-cn",
   "description": "在源代码管理中根据 Git 变更自动生成提交信息。",
   "version": "0.0.1",
   "publisher": "zuojinpu",

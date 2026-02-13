@@ -1,0 +1,79 @@
+﻿{
+  "name": "commit-generator",
+  "displayName": "Commit Generator",
+  "description": "Generate commit messages from git changes directly in Source Control.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Source Control"
+  ],
+  "activationEvents": [
+    "onCommand:commitGenerator.generate"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "commitGenerator.generate",
+        "title": "Generate Commit Message",
+        "category": "Commit Generator",
+        "icon": {
+          "light": "media/wand-light.svg",
+          "dark": "media/wand-dark.svg"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Commit Generator",
+      "properties": {
+        "commitGenerator.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenAI API key used to generate commit messages. If empty, extension will use `OPENAI_API_KEY` environment variable."
+        },
+        "commitGenerator.openaiModel": {
+          "type": "string",
+          "default": "gpt-4.1-mini",
+          "markdownDescription": "OpenAI model for commit generation."
+        },
+        "commitGenerator.chineseStyle": {
+          "type": "string",
+          "enum": [
+            "business",
+            "engineering",
+            "concise"
+          ],
+          "default": "engineering",
+          "markdownDescription": "Chinese commit style template. `business`: product/feature wording, `engineering`: technical wording, `concise`: short and direct wording."
+        }
+      }
+    },
+    "menus": {
+      "scm/title": [
+        {
+          "command": "commitGenerator.generate",
+          "when": "scmProvider == git",
+          "group": "navigation@9"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "commitGenerator.generate",
+          "when": "scmProvider == git"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.4"
+  }
+}

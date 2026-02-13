@@ -5,7 +5,7 @@
   "version": "0.0.1",
   "publisher": "zuojinpu",
   "author": "zuojinpu",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/jpzuo/commit-generator.git"
@@ -26,7 +26,7 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Source Control"
+    "SCM Providers"
   ],
   "activationEvents": [
     "onStartupFinished",

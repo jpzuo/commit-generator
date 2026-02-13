@@ -20,35 +20,59 @@ interface CommitContext {
 }
 
 type ChineseStyle = "business" | "engineering" | "concise";
+type MessageSource = "ai" | "fallback";
+type ApiProtocol = "chatCompletions" | "responses";
+
+interface BuildResult {
+  message: string;
+  source: MessageSource;
+  reason?: string;
+}
 
 const MAX_DIFF_CHARS = 12000;
+const output = vscode.window.createOutputChannel("Commit Generator");
 
 export function activate(context: vscode.ExtensionContext): void {
+  vscode.window.showInformationMessage("Commit Generator 已激活。可在状态栏点击“生成提交信息”。");
+
   const disposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
     try {
       const git = await getGitApi();
       if (!git || git.repositories.length === 0) {
-        vscode.window.showErrorMessage("No Git repository found in current workspace.");
+        vscode.window.showErrorMessage("当前工作区未检测到 Git 仓库。");
         return;
       }
 
       const repo = pickRepository(git.repositories);
-      const message = await buildCommitMessage(repo.rootUri.fsPath);
+      const result = await buildCommitMessage(repo.rootUri.fsPath);
 
-      if (!message) {
-        vscode.window.showWarningMessage("No changes detected. Nothing to generate.");
+      if (!result.message) {
+        vscode.window.showWarningMessage("未检测到代码变更，无法生成提交信息。");
         return;
       }
 
-      repo.inputBox.value = message;
-      vscode.window.showInformationMessage("Commit message generated.");
+      repo.inputBox.value = result.message;
+      const sourceText = result.source === "ai" ? "AI" : "本地规则";
+      vscode.window.showInformationMessage(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
+
+      output.appendLine(`[result] source=${result.source} message="${result.message}"`);
+      if (result.reason) {
+        output.appendLine(`[fallback-reason] ${result.reason}`);
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`Failed to generate commit message: ${detail}`);
+      vscode.window.showErrorMessage(`生成提交信息失败：${detail}`);
+      output.appendLine(`[error] ${detail}`);
     }
   });
 
-  context.subscriptions.push(disposable);
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBarItem.text = "$(sparkle) 生成提交信息";
+  statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
+  statusBarItem.command = "commitGenerator.generate";
+  statusBarItem.show();
+
+  context.subscriptions.push(disposable, statusBarItem, output);
 }
 
 export function deactivate(): void {
@@ -80,19 +104,32 @@ function pickRepository(repositories: GitRepository[]): GitRepository {
   return match ?? repositories[0];
 }
 
-async function buildCommitMessage(repoPath: string): Promise<string> {
+async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
   const style = getChineseStyle();
   const context = await collectCommitContext(repoPath);
   if (context.files.length === 0) {
-    return "";
+    return { message: "", source: "fallback", reason: "no_changes" };
   }
 
-  const aiMessage = await generateWithOpenAI(context, style);
-  if (aiMessage) {
-    return aiMessage;
-  }
+  try {
+    const aiMessage = await generateWithOpenAI(context, style);
+    if (aiMessage) {
+      return { message: aiMessage, source: "ai" };
+    }
 
-  return buildRuleBasedMessage(context.files, context.diff, style);
+    return {
+      message: buildRuleBasedMessage(context.files, context.diff, style),
+      source: "fallback",
+      reason: "ai_empty_or_invalid"
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      message: buildRuleBasedMessage(context.files, context.diff, style),
+      source: "fallback",
+      reason: `ai_error: ${detail}`
+    };
+  }
 }
 
 async function collectCommitContext(repoPath: string): Promise<CommitContext> {
@@ -143,38 +180,59 @@ async function buildUntrackedPreview(repoPath: string, files: string[]): Promise
 
 async function generateWithOpenAI(context: CommitContext, style: ChineseStyle): Promise<string> {
   const config = vscode.workspace.getConfiguration("commitGenerator");
-  const apiKey = String(config.get<string>("openaiApiKey", "")).trim() || process.env.OPENAI_API_KEY?.trim();
+  const apiKey =
+    String(config.get<string>("apiKey", "")).trim() ||
+    String(config.get<string>("openaiApiKey", "")).trim() ||
+    process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
-    return "";
+    throw new Error("未配置 API Key（commitGenerator.apiKey / commitGenerator.openaiApiKey / OPENAI_API_KEY）。");
   }
 
+  const baseUrl = normalizeBaseUrl(String(config.get<string>("apiBaseUrl", "https://api.openai.com")).trim());
+  const apiProtocol = getApiProtocol();
   const model = String(config.get<string>("openaiModel", "gpt-4.1-mini")).trim() || "gpt-4.1-mini";
   const prompt = createPrompt(context, style);
+  const endpoint = apiProtocol === "responses" ? `${baseUrl}/v1/responses` : `${baseUrl}/v1/chat/completions`;
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const body =
+    apiProtocol === "responses"
+      ? {
+          model,
+          input: prompt,
+          temperature: 0.2
+        }
+      : {
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2
+        };
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      model,
-      input: prompt,
-      temperature: 0.2
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`OpenAI API error (${response.status}): ${errorText}`);
+    throw new Error(`AI API error (${response.status}) [${endpoint}]: ${errorText}`);
   }
 
-  const data = (await response.json()) as {
-    output_text?: string;
-    output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-  };
+  if (apiProtocol === "responses") {
+    const data = (await response.json()) as {
+      output_text?: string;
+      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+    };
+    return normalizeMessage(extractResponseText(data));
+  }
 
-  return normalizeMessage(extractResponseText(data));
+  const chatData = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
+  };
+  return normalizeMessage(extractChatCompletionsText(chatData));
 }
 
 function createPrompt(context: CommitContext, style: ChineseStyle): string {
@@ -216,6 +274,25 @@ function extractResponseText(data: {
   return "";
 }
 
+function extractChatCompletionsText(data: {
+  choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
+}): string {
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    for (const chunk of content) {
+      if (chunk.text) {
+        return chunk.text;
+      }
+    }
+  }
+
+  return "";
+}
+
 function normalizeMessage(value: string): string {
   const firstLine = value
     .replace(/[`"'*]/g, "")
@@ -237,7 +314,7 @@ function normalizeMessage(value: string): string {
 function buildRuleBasedMessage(files: string[], patch: string, style: ChineseStyle): string {
   const type = inferType(files, patch);
   const scope = inferScope(files);
-  const subject = inferSubject(files, style);
+  const subject = inferSubject(files, patch, style);
 
   return scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
 }
@@ -320,7 +397,12 @@ function sanitizeScope(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
-function inferSubject(files: string[], style: ChineseStyle): string {
+function inferSubject(files: string[], patch: string, style: ChineseStyle): string {
+  const semanticSubject = inferSemanticSubject(files, patch, style);
+  if (semanticSubject) {
+    return semanticSubject;
+  }
+
   if (files.length === 1) {
     return formatSubject(style, path.basename(files[0]), 1, "");
   }
@@ -337,6 +419,52 @@ function inferSubject(files: string[], style: ChineseStyle): string {
   }
 
   return formatSubject(style, "", files.length, "");
+}
+
+function inferSemanticSubject(files: string[], patch: string, style: ChineseStyle): string {
+  const text = `${files.join("\n")}\n${patch}`.toLowerCase();
+  const targets: string[] = [];
+
+  if (text.includes("statusbar") || text.includes("createstatusbaritem")) {
+    targets.push("状态栏入口");
+  }
+  if (text.includes("scm/title") || text.includes("commandpalette") || text.includes("\"menus\"")) {
+    targets.push("命令入口展示");
+  }
+  if (text.includes("activationevents") || text.includes("onstartupfinished") || text.includes("activate(")) {
+    targets.push("扩展激活逻辑");
+  }
+  if (text.includes("readme") || files.some((file) => /readme/i.test(file))) {
+    targets.push("使用文档");
+  }
+  if (text.includes("configuration") || text.includes("\"settings\"") || text.includes(".json")) {
+    targets.push("配置项");
+  }
+  if (text.includes("test") || files.some((file) => /test/i.test(file))) {
+    targets.push("测试用例");
+  }
+
+  const uniqueTargets = uniq(targets).slice(0, 2);
+  if (uniqueTargets.length === 0) {
+    return "";
+  }
+
+  const action = inferAction(text, style);
+  return style === "concise" ? `${action}${uniqueTargets.join("和")}` : `${action}${uniqueTargets.join("并")}`;
+}
+
+function inferAction(text: string, style: ChineseStyle): string {
+  if (text.includes("fix") || text.includes("bug") || text.includes("error") || text.includes("异常")) {
+    return style === "business" ? "修复" : "修正";
+  }
+  if (text.includes("add") || text.includes("new file") || text.includes("+++")) {
+    return style === "business" ? "新增" : "增加";
+  }
+  if (text.includes("refactor")) {
+    return style === "business" ? "优化" : "重构";
+  }
+
+  return style === "business" ? "优化" : "调整";
 }
 
 function isValidConventionalCommit(message: string): boolean {
@@ -363,6 +491,19 @@ function getChineseStyle(): ChineseStyle {
   return "engineering";
 }
 
+function getApiProtocol(): ApiProtocol {
+  const config = vscode.workspace.getConfiguration("commitGenerator");
+  const value = String(config.get<string>("apiProtocol", "chatCompletions")).trim();
+  return value === "responses" ? "responses" : "chatCompletions";
+}
+
+function normalizeBaseUrl(url: string): string {
+  if (!url) {
+    return "https://api.openai.com";
+  }
+  return url.replace(/\/+$/, "");
+}
+
 function getStyleInstruction(style: ChineseStyle): string {
   if (style === "business") {
     return "突出业务价值和用户收益，例如“新增”“优化”“修复某场景问题”";
@@ -381,7 +522,7 @@ function formatSubject(style: ChineseStyle, fileName: string, fileCount: number,
     if (dir) {
       return `完善 ${dir} 模块功能实现`;
     }
-    return `优化多处功能实现`;
+    return "优化多处功能实现";
   }
 
   if (style === "concise") {

@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "commit-generator",
   "displayName": "Commit Generator",
   "description": "Generate commit messages from git changes directly in Source Control.",
@@ -11,14 +11,20 @@
     "Source Control"
   ],
   "activationEvents": [
-    "onCommand:commitGenerator.generate"
+    "*",
+    "onStartupFinished",
+    "onCommand:commitGenerator.generate",
+    "workspaceContains:.git"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "commitGenerator.generate",
-        "title": "Generate Commit Message",
+        "title": "生成 Commit 信息",
         "category": "Commit Generator",
         "icon": {
           "light": "media/wand-light.svg",
@@ -33,6 +39,25 @@
           "type": "string",
           "default": "",
           "markdownDescription": "OpenAI API key used to generate commit messages. If empty, extension will use `OPENAI_API_KEY` environment variable."
+        },
+        "commitGenerator.apiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "API key for OpenAI-compatible relay service. If empty, extension will fallback to `commitGenerator.openaiApiKey` and then `OPENAI_API_KEY`."
+        },
+        "commitGenerator.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com",
+          "markdownDescription": "Base URL of OpenAI-compatible API service, for example `https://api.openai.com` or your relay URL."
+        },
+        "commitGenerator.apiProtocol": {
+          "type": "string",
+          "enum": [
+            "chatCompletions",
+            "responses"
+          ],
+          "default": "chatCompletions",
+          "markdownDescription": "API protocol type. Most relay services use `chatCompletions`."
         },
         "commitGenerator.openaiModel": {
           "type": "string",
@@ -61,8 +86,7 @@
       ],
       "commandPalette": [
         {
-          "command": "commitGenerator.generate",
-          "when": "scmProvider == git"
+          "command": "commitGenerator.generate"
         }
       ]
     }
@@ -74,6 +98,7 @@
   "devDependencies": {
     "@types/node": "^20.14.2",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.7.1",
     "typescript": "^5.5.4"
   }
 }

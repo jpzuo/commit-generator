@@ -1,34 +1,52 @@
 ﻿# Commit Generator
 
-一个 VSCode 扩展：在源代码管理（Source Control）工具栏中提供按钮，一键根据当前 Git 变更自动生成提交信息。
+一个 VS Code 扩展：在 Source Control（源代码管理） 视图和状态栏提供入口，根据当前 Git 变更自动生成中文 Conventional Commit 提交信息。
 
-生成结果始终为中文，并符合 Conventional Commits 规范。
+## 功能说明
+
+- 生成格式固定为 `type(scope): subject` 或 `type: subject`
+- `type` 限定为 Conventional Commits 常见类型（`feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert`）
+- `subject` 要求简体中文、单行
+- 默认优先调用 AI 生成；AI 不可用时自动回退本地规则生成
+- 会综合以下变更内容生成提交信息：
+  - staged diff
+  - unstaged diff
+  - untracked 文件（最多预览前 5 个文件内容）
 
 ## 使用方式
 
 1. 打开一个 Git 仓库工作区。
-2. 进入 VSCode 的源代码管理面板（Source Control）。
-3. 点击源代码管理标题栏上的魔棒图标，或点击状态栏按钮“生成提交信息”。
-4. 插件会自动生成提交信息，并直接覆盖写入提交输入框。
+2. 打开 Source Control 视图。
+3. 点击 Source Control 标题栏按钮，或状态栏按钮 `生成提交信息`。
+4. 插件会生成并覆盖写入当前仓库的提交输入框。
 
-也可以在命令面板中执行：`生成 Commit 信息`。
+也可在命令面板执行命令 ID：`commitGenerator.generate`。
 
-## OpenAI 配置
+## 配置项
 
-可任选其一配置 API Key：
+在 VS Code 设置（`commitGenerator.*`）中配置：
 
-1. VSCode 设置项：`commitGenerator.openaiApiKey`
-2. 环境变量：`OPENAI_API_KEY`
-
-可选配置：
-
+- `commitGenerator.apiKey`
+  - OpenAI 兼容中转服务的 API Key
+  - 若为空，回退到 `commitGenerator.openaiApiKey`，再回退到环境变量 `OPENAI_API_KEY`
+- `commitGenerator.openaiApiKey`
+  - OpenAI API Key（兼容老配置）
+- `commitGenerator.apiBaseUrl`（默认：`https://api.openai.com`）
+  - OpenAI 兼容接口地址
+- `commitGenerator.apiProtocol`（默认：`chatCompletions`）
+  - 可选：`chatCompletions` 或 `responses`
 - `commitGenerator.openaiModel`（默认：`gpt-4.1-mini`）
-- `commitGenerator.chineseStyle`
-  - `engineering`（默认）：偏技术表达
+  - 生成提交信息使用的模型名
+- `commitGenerator.chineseStyle`（默认：`engineering`）
+  - `engineering`：偏技术表达
   - `business`：偏业务价值表达
-  - `concise`：偏精简表达
+  - `concise`：偏简洁表达
 
-如果未配置 API Key，插件会自动回退到本地规则生成模式。
+## 回退策略
+
+- 未检测到代码变更：不生成提交信息
+- AI 返回为空或不符合格式：回退本地规则生成
+- AI 请求失败（例如 key、网络、接口错误）：回退本地规则生成
 
 ## 开发调试
 
@@ -37,4 +55,4 @@ npm install
 npm run compile
 ```
 
-在 VSCode 中按 `F5` 启动 Extension Development Host 进行调试。
+在 VS Code 中按 `F5` 启动 Extension Development Host 调试。

@@ -1,9 +1,19 @@
 {
   "name": "commit-generator",
-  "displayName": "Commit Generator",
-  "description": "Generate commit messages from git changes directly in Source Control.",
+  "displayName": "提交信息生成器",
+  "description": "在源代码管理中根据 Git 变更自动生成提交信息。",
   "version": "0.0.1",
-  "publisher": "local",
+  "publisher": "zuojinpu",
+  "author": "zuojinpu",
+  "license": "UNLICENSED",
+  "keywords": [
+    "git",
+    "commit",
+    "conventional-commits",
+    "source-control",
+    "openai",
+    "chinese"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -25,7 +35,7 @@
       {
         "command": "commitGenerator.generate",
         "title": "生成 Commit 信息",
-        "category": "Commit Generator",
+        "category": "提交信息生成器",
         "icon": {
           "light": "media/wand-light.svg",
           "dark": "media/wand-dark.svg"
@@ -33,22 +43,22 @@
       }
     ],
     "configuration": {
-      "title": "Commit Generator",
+      "title": "提交信息生成器",
       "properties": {
         "commitGenerator.openaiApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "OpenAI API key used to generate commit messages. If empty, extension will use `OPENAI_API_KEY` environment variable."
+          "markdownDescription": "用于生成提交信息的 OpenAI API Key。为空时会使用环境变量 `OPENAI_API_KEY`。"
         },
         "commitGenerator.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "API key for OpenAI-compatible relay service. If empty, extension will fallback to `commitGenerator.openaiApiKey` and then `OPENAI_API_KEY`."
+          "markdownDescription": "OpenAI 兼容中转服务的 API Key。为空时会依次回退到 `commitGenerator.openaiApiKey` 和 `OPENAI_API_KEY`。"
         },
         "commitGenerator.apiBaseUrl": {
           "type": "string",
           "default": "https://api.openai.com",
-          "markdownDescription": "Base URL of OpenAI-compatible API service, for example `https://api.openai.com` or your relay URL."
+          "markdownDescription": "OpenAI 兼容接口的基础地址，例如 `https://api.openai.com` 或你的中转地址。"
         },
         "commitGenerator.apiProtocol": {
           "type": "string",
@@ -57,12 +67,12 @@
             "responses"
           ],
           "default": "chatCompletions",
-          "markdownDescription": "API protocol type. Most relay services use `chatCompletions`."
+          "markdownDescription": "接口协议类型。大多数中转服务使用 `chatCompletions`。"
         },
         "commitGenerator.openaiModel": {
           "type": "string",
           "default": "gpt-4.1-mini",
-          "markdownDescription": "OpenAI model for commit generation."
+          "markdownDescription": "用于生成提交信息的 OpenAI 模型。"
         },
         "commitGenerator.chineseStyle": {
           "type": "string",
@@ -72,7 +82,7 @@
             "concise"
           ],
           "default": "engineering",
-          "markdownDescription": "Chinese commit style template. `business`: product/feature wording, `engineering`: technical wording, `concise`: short and direct wording."
+          "markdownDescription": "中文提交风格模板。`business`：偏业务价值表达；`engineering`：偏技术改动表达；`concise`：简洁直接表达。"
         }
       }
     },

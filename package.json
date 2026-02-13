@@ -6,6 +6,14 @@
   "publisher": "zuojinpu",
   "author": "zuojinpu",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpzuo/commit-generator.git"
+  },
+  "homepage": "https://github.com/jpzuo/commit-generator#readme",
+  "bugs": {
+    "url": "https://github.com/jpzuo/commit-generator/issues"
+  },
   "keywords": [
     "git",
     "commit",
@@ -21,7 +29,6 @@
     "Source Control"
   ],
   "activationEvents": [
-    "*",
     "onStartupFinished",
     "onCommand:commitGenerator.generate",
     "workspaceContains:.git"

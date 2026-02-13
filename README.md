@@ -56,3 +56,8 @@ npm run compile
 ```
 
 在 VS Code 中按 `F5` 启动 Extension Development Host 调试。
+
+## 图标来源
+
+- Extension Icon: ["Magic Wand Icon 229981 Color Flipped" by videoplasty.com](https://commons.wikimedia.org/wiki/File:Magic_Wand_Icon_229981_Color_Flipped.svg)
+- License: [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)

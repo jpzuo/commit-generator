@@ -47,7 +47,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const result = await buildCommitMessage(repo.rootUri.fsPath);
 
       if (!result.message) {
-        vscode.window.showWarningMessage("未检测到代码变更，无法生成提交信息。");
+        vscode.window.showWarningMessage("暂存区无变更，未生成提交信息。");
         return;
       }
 
@@ -134,48 +134,17 @@ async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
 
 async function collectCommitContext(repoPath: string): Promise<CommitContext> {
   const stagedFiles = await runGit(repoPath, ["diff", "--cached", "--name-only"]);
-  const unstagedFiles = await runGit(repoPath, ["diff", "--name-only"]);
-  const untrackedFiles = await runGit(repoPath, ["ls-files", "--others", "--exclude-standard"]);
-
   const stagedList = toLines(stagedFiles);
-  const unstagedList = toLines(unstagedFiles);
-  const untrackedList = toLines(untrackedFiles);
-
-  const allFiles = uniq([...stagedList, ...unstagedList, ...untrackedList]);
-  if (allFiles.length === 0) {
+  if (stagedList.length === 0) {
     return { files: [], diff: "" };
   }
 
-  const stagedPatch = stagedList.length > 0 ? await runGit(repoPath, ["diff", "--cached", "--", ...stagedList]) : "";
-  const unstagedPatch = unstagedList.length > 0 ? await runGit(repoPath, ["diff", "--", ...unstagedList]) : "";
-  const untrackedPreview = await buildUntrackedPreview(repoPath, untrackedList);
-
-  const diff = [stagedPatch, unstagedPatch, untrackedPreview].filter((value) => value.length > 0).join("\n\n");
+  const diff = await runGit(repoPath, ["diff", "--cached", "--", ...stagedList]);
 
   return {
-    files: allFiles,
+    files: stagedList,
     diff: truncateMultiline(diff, MAX_DIFF_CHARS)
   };
-}
-
-async function buildUntrackedPreview(repoPath: string, files: string[]): Promise<string> {
-  if (files.length === 0) {
-    return "";
-  }
-
-  const previews = await Promise.all(
-    files.slice(0, 5).map(async (file) => {
-      try {
-        const absolute = path.join(repoPath, file);
-        const content = await fs.readFile(absolute, "utf8");
-        return `# Untracked: ${file}\n${truncateMultiline(content, 1000)}`;
-      } catch {
-        return `# Untracked: ${file}`;
-      }
-    })
-  );
-
-  return previews.join("\n\n");
 }
 
 async function generateWithOpenAI(context: CommitContext, style: ChineseStyle): Promise<string> {

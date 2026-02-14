@@ -31,46 +31,75 @@ interface BuildResult {
 
 const MAX_DIFF_CHARS = 12000;
 const output = vscode.window.createOutputChannel("Commit Generator");
+const STATUS_IDLE_TEXT = "$(sparkle) 生成提交信息";
+const STATUS_BUSY_TEXT = "$(sync~spin) 正在生成提交信息...";
 
 export function activate(context: vscode.ExtensionContext): void {
   vscode.window.showInformationMessage("Commit Generator 已激活。可在状态栏点击“生成提交信息”。");
+  let isGenerating = false;
+
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBarItem.text = STATUS_IDLE_TEXT;
+  statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
+  statusBarItem.command = "commitGenerator.generate";
+  statusBarItem.show();
 
   const disposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
+    if (isGenerating) {
+      vscode.window.showInformationMessage("正在生成提交信息，请稍候...");
+      return;
+    }
+
+    isGenerating = true;
+    statusBarItem.text = STATUS_BUSY_TEXT;
+    statusBarItem.tooltip = "正在生成中，请稍候...";
+
     try {
-      const git = await getGitApi();
-      if (!git || git.repositories.length === 0) {
-        vscode.window.showErrorMessage("当前工作区未检测到 Git 仓库。");
-        return;
-      }
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "正在生成提交信息",
+          cancellable: false
+        },
+        async (progress) => {
+          progress.report({ message: "正在读取暂存区变更..." });
 
-      const repo = pickRepository(git.repositories);
-      const result = await buildCommitMessage(repo.rootUri.fsPath);
+          const git = await getGitApi();
+          if (!git || git.repositories.length === 0) {
+            vscode.window.showErrorMessage("当前工作区未检测到 Git 仓库。");
+            return;
+          }
 
-      if (!result.message) {
-        vscode.window.showWarningMessage("暂存区无变更，未生成提交信息。");
-        return;
-      }
+          const repo = pickRepository(git.repositories);
+          progress.report({ message: "正在调用生成接口..." });
+          const result = await buildCommitMessage(repo.rootUri.fsPath);
 
-      repo.inputBox.value = result.message;
-      const sourceText = result.source === "ai" ? "AI" : "本地规则";
-      vscode.window.showInformationMessage(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
+          if (!result.message) {
+            vscode.window.showWarningMessage("暂存区无变更，未生成提交信息。");
+            return;
+          }
 
-      output.appendLine(`[result] source=${result.source} message="${result.message}"`);
-      if (result.reason) {
-        output.appendLine(`[fallback-reason] ${result.reason}`);
-      }
+          progress.report({ message: "正在写入提交输入框..." });
+          repo.inputBox.value = result.message;
+          const sourceText = result.source === "ai" ? "AI" : "本地规则";
+          vscode.window.showInformationMessage(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
+
+          output.appendLine(`[result] source=${result.source} message="${result.message}"`);
+          if (result.reason) {
+            output.appendLine(`[fallback-reason] ${result.reason}`);
+          }
+        }
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`生成提交信息失败：${detail}`);
       output.appendLine(`[error] ${detail}`);
+    } finally {
+      isGenerating = false;
+      statusBarItem.text = STATUS_IDLE_TEXT;
+      statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
     }
   });
-
-  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.text = "$(sparkle) 生成提交信息";
-  statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
-  statusBarItem.command = "commitGenerator.generate";
-  statusBarItem.show();
 
   context.subscriptions.push(disposable, statusBarItem, output);
 }

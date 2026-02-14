@@ -112,8 +112,11 @@ async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
   }
 
   try {
-    const aiMessage = await generateWithOpenAI(context, style);
+    let aiMessage = await generateWithOpenAI(context, style);
     if (aiMessage) {
+      if (!hasCommitBody(aiMessage)) {
+        aiMessage = `${aiMessage}\n\n${buildDetailedBody(context.files, context.diff)}`;
+      }
       return { message: aiMessage, source: "ai" };
     }
 
@@ -208,9 +211,11 @@ function createPrompt(context: CommitContext, style: ChineseStyle): string {
   const styleInstruction = getStyleInstruction(style);
   return [
     "你是一名资深工程师，负责生成 git 提交信息。",
-    "只返回一行，必须符合 Conventional Commits：type(scope): subject 或 type: subject。",
+    "输出格式必须是：第一行标题 + 空行 + 详细正文。",
+    "标题必须符合 Conventional Commits：type(scope): subject 或 type: subject。",
+    "描述具体改动，改动按分类以 - 开头。",// 、影响范围和注意事项
     "type 必须是英文小写（feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert）。",
-    "subject 必须是简体中文，使用动宾短语，禁止英文句子、禁止句号、禁止多行、禁止 markdown。",
+    "subject 必须是简体中文，使用动宾短语，禁止英文句子、禁止句号。",
     `中文风格要求：${styleInstruction}`,
     "",
     "变更文件：",
@@ -263,29 +268,77 @@ function extractChatCompletionsText(data: {
 }
 
 function normalizeMessage(value: string): string {
-  const firstLine = value
+  const normalizedLines = value
     .replace(/[`"'*]/g, "")
+    .replace(/：/g, ":")
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
+    .map((line) => sanitizeCandidateLine(line))
+    .filter((line) => line.length > 0);
 
-  if (!firstLine) {
+  if (normalizedLines.length === 0) {
     return "";
   }
 
-  if (!isValidConventionalCommit(firstLine)) {
+  const headerIndex = normalizedLines.findIndex((line) => isValidConventionalCommit(line));
+  if (headerIndex < 0) {
     return "";
   }
 
-  return truncateInline(firstLine, 72);
+  const header = truncateInline(normalizedLines[headerIndex], 72);
+  const bodyLines = normalizedLines
+    .filter((line, index) => index !== headerIndex)
+    .filter((line) => !isValidConventionalCommit(line))
+    .map((line) => (line.startsWith("- ") ? line : `- ${line}`))
+    .slice(0, 6);
+
+  if (bodyLines.length === 0) {
+    return header;
+  }
+
+  return `${header}\n\n${bodyLines.join("\n")}`;
+}
+
+function sanitizeCandidateLine(line: string): string {
+  let value = line.trim();
+  if (!value) {
+    return "";
+  }
+
+  value = value
+    .replace(/^(commit message|message|建议提交信息|提交信息|推荐提交信息)\s*[:：]\s*/i, "")
+    .replace(/^\d+[\).\s]+/, "")
+    .trim();
+
+  const conventionalMatch = value.match(
+    /(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-zA-Z0-9_-]+\))?\s*:\s*.+/i
+  );
+  if (conventionalMatch) {
+    value = conventionalMatch[0];
+  }
+
+  const colonIndex = value.indexOf(":");
+  if (colonIndex > 0) {
+    const left = value.slice(0, colonIndex).trim();
+    const right = value.slice(colonIndex + 1).trim();
+    value = `${left}: ${right}`;
+  }
+
+  return value;
+}
+
+function hasCommitBody(message: string): boolean {
+  const parts = message.split(/\r?\n\r?\n/);
+  return parts.length > 1 && parts[1].trim().length > 0;
 }
 
 function buildRuleBasedMessage(files: string[], patch: string, style: ChineseStyle): string {
   const type = inferType(files, patch);
   const scope = inferScope(files);
   const subject = inferSubject(files, patch, style);
+  const header = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+  const body = buildDetailedBody(files, patch);
 
-  return scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
+  return `${header}\n\n${body}`;
 }
 
 function truncateInline(value: string, limit: number): string {
@@ -392,6 +445,47 @@ function inferSubject(files: string[], patch: string, style: ChineseStyle): stri
 
 function inferSemanticSubject(files: string[], patch: string, style: ChineseStyle): string {
   const text = `${files.join("\n")}\n${patch}`.toLowerCase();
+  const uniqueTargets = collectSemanticTargets(text, files).slice(0, 2);
+  if (uniqueTargets.length === 0) {
+    return "";
+  }
+
+  const action = inferAction(text, style);
+  return style === "concise" ? `${action}${uniqueTargets.join("和")}` : `${action}${uniqueTargets.join("并")}`;
+}
+
+function inferAction(text: string, style: ChineseStyle): string {
+  if (text.includes("fix") || text.includes("bug") || text.includes("error") || text.includes("异常")) {
+    return style === "business" ? "修复" : "修正";
+  }
+  if (text.includes("add") || text.includes("new file") || text.includes("+++")) {
+    return style === "business" ? "新增" : "增加";
+  }
+  if (text.includes("refactor")) {
+    return style === "business" ? "优化" : "重构";
+  }
+
+  return style === "business" ? "优化" : "调整";
+}
+
+function buildDetailedBody(files: string[], patch: string): string {
+  const text = `${files.join("\n")}\n${patch}`.toLowerCase();
+  const targets = collectSemanticTargets(text, files);
+  const filePreview = files.slice(0, 3).join("、");
+  const suffix = files.length > 3 ? ` 等 ${files.length} 个文件` : "";
+  const stats = countPatchStats(patch);
+
+  const lines = [
+    `- 变更文件：${filePreview}${suffix}`.trim(),
+    `- 代码变更：新增 ${stats.added} 行，删除 ${stats.deleted} 行`,
+    `- 主要内容：${targets.length > 0 ? targets.slice(0, 3).join("、") : "调整实现细节并完善相关逻辑"}`,
+    "- 影响范围：仅基于当前暂存区变更生成"
+  ];
+
+  return lines.join("\n");
+}
+
+function collectSemanticTargets(text: string, files: string[]): string[] {
   const targets: string[] = [];
 
   if (text.includes("statusbar") || text.includes("createstatusbaritem")) {
@@ -413,27 +507,27 @@ function inferSemanticSubject(files: string[], patch: string, style: ChineseStyl
     targets.push("测试用例");
   }
 
-  const uniqueTargets = uniq(targets).slice(0, 2);
-  if (uniqueTargets.length === 0) {
-    return "";
-  }
-
-  const action = inferAction(text, style);
-  return style === "concise" ? `${action}${uniqueTargets.join("和")}` : `${action}${uniqueTargets.join("并")}`;
+  return uniq(targets);
 }
 
-function inferAction(text: string, style: ChineseStyle): string {
-  if (text.includes("fix") || text.includes("bug") || text.includes("error") || text.includes("异常")) {
-    return style === "business" ? "修复" : "修正";
-  }
-  if (text.includes("add") || text.includes("new file") || text.includes("+++")) {
-    return style === "business" ? "新增" : "增加";
-  }
-  if (text.includes("refactor")) {
-    return style === "business" ? "优化" : "重构";
+function countPatchStats(patch: string): { added: number; deleted: number } {
+  let added = 0;
+  let deleted = 0;
+
+  for (const line of patch.split(/\r?\n/)) {
+    if (line.startsWith("+++ ") || line.startsWith("--- ")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      added += 1;
+      continue;
+    }
+    if (line.startsWith("-")) {
+      deleted += 1;
+    }
   }
 
-  return style === "business" ? "优化" : "调整";
+  return { added, deleted };
 }
 
 function isValidConventionalCommit(message: string): boolean {

@@ -62,6 +62,22 @@
 }
 ```
 
+## 打包
+
+一键升级补丁版本并打包：
+
+```powershell
+npm run release
+```
+
+指定升级类型（`patch/minor/major`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1 -ReleaseType minor
+```
+
+执行后会在项目根目录生成 `*.vsix` 安装包。
+
 ## 图标来源
 
 - Extension Icon: ["Magic Wand Icon 229981 Color Flipped" by videoplasty.com](https://commons.wikimedia.org/wiki/File:Magic_Wand_Icon_229981_Color_Flipped.svg)

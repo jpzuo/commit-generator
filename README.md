@@ -78,6 +78,20 @@ powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1 -ReleaseType mino
 
 执行后会在项目根目录生成 `*.vsix` 安装包。
 
+## 问题反馈
+
+如果你在使用中遇到问题，可通过邮箱反馈：
+
+- 邮箱：`zuojinpu@qq.com`
+
+为便于快速定位问题，建议尽量提供以下信息（越详细越好）：
+
+- 问题描述：你做了什么操作、期望结果是什么、实际结果是什么
+- 问题贴图：报错弹窗、控制台日志、界面状态截图
+- 复现步骤：按步骤写出如何稳定复现
+- 环境信息：操作系统、VS Code 版本、插件版本
+- 配置信息：`commitGenerator.*` 相关配置（注意隐藏密钥等敏感信息）
+
 ## 图标来源
 
 - Extension Icon: ["Magic Wand Icon 229981 Color Flipped" by videoplasty.com](https://commons.wikimedia.org/wiki/File:Magic_Wand_Icon_229981_Color_Flipped.svg)

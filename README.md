@@ -6,21 +6,22 @@
 
 ## 功能说明
 
-- 生成格式固定为 `type(scope): subject` 或 `type: subject`
+- 输出为“标题 + 空行 + 详细正文”
+- 标题格式固定为 `type(scope): subject` 或 `type: subject`
 - `type` 限定为 Conventional Commits 常见类型（`feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert`）
 - `subject` 要求简体中文、单行
 - 默认优先调用 AI 生成；AI 不可用时自动回退本地规则生成
-- 会综合以下变更内容生成提交信息：
-  - staged diff
-  - unstaged diff
-  - untracked 文件（最多预览前 5 个文件内容）
+- 仅基于当前暂存区（staged）变更生成（即已 `git add` 的内容）
+- 变更 diff 最多取前 12000 个字符参与生成，超出部分会截断
+- 详细正文中的“变更文件”最多展示前 3 个文件名，其余以“等 N 个文件”概括
 
 ## 使用方式
 
 1. 打开一个 Git 仓库工作区。
 2. 打开 Source Control 视图。
-3. 点击 Source Control 标题栏按钮，或状态栏按钮 `生成提交信息`。
-4. 插件会生成并覆盖写入当前仓库的提交输入框。
+3. 先将要提交的改动加入暂存区（`git add`）。
+4. 点击 Source Control 标题栏按钮，或状态栏按钮 `生成提交信息`。
+5. 插件会生成并覆盖写入当前仓库的提交输入框。
 
 也可在命令面板执行命令 ID：`commitGenerator.generate`。
 
@@ -52,8 +53,8 @@
 
 ```json
 {
-  // 我用的是这家的目前（2026-2-15）免费，有GLM和Qwen模型，只是生成描述的话够用 -> https://pureai.shop/dashboard.html
-  "commitGenerator.apiBaseUrl": "https://sym-tenant-24992923-a800code-ingress-cn-xibei1.eks.ebcloud.com:60443", 
+  // 可替换为你的 OpenAI 兼容服务地址，兼容任何第三方openAI格式
+  "commitGenerator.apiBaseUrl": "https://api.openai.com",
   "commitGenerator.apiKey": "sk-xxxx",
   "commitGenerator.apiProtocol": "chatCompletions",
   "commitGenerator.openaiModel": "GLM",

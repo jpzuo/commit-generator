@@ -33,9 +33,30 @@ const MAX_DIFF_CHARS = 12000;
 const output = vscode.window.createOutputChannel("Commit Generator");
 const STATUS_IDLE_TEXT = "$(sparkle) 生成提交信息";
 const STATUS_BUSY_TEXT = "$(sync~spin) 正在生成提交信息...";
+const INFO_TIMEOUT_MS = 3000;
+const WARN_TIMEOUT_MS = 5000;
+const ERROR_TIMEOUT_MS = 8000;
+const IGNORED_COMMIT_FILES = new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "npm-shrinkwrap.json"
+]);
+
+function notifyStatus(message: string, level: "info" | "warn" | "error" = "info"): void {
+  const timeout =
+    level === "error" ? ERROR_TIMEOUT_MS : level === "warn" ? WARN_TIMEOUT_MS : INFO_TIMEOUT_MS;
+  vscode.window.setStatusBarMessage(message, timeout);
+  if (level === "warn") {
+    output.appendLine(`[warn] ${message}`);
+  }
+  if (level === "error") {
+    output.appendLine(`[error] ${message}`);
+  }
+}
 
 export function activate(context: vscode.ExtensionContext): void {
-  vscode.window.showInformationMessage("Commit Generator 已激活。可在状态栏点击“生成提交信息”。");
   let isGenerating = false;
 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -46,7 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const disposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
     if (isGenerating) {
-      vscode.window.showInformationMessage("正在生成提交信息，请稍候...");
+      notifyStatus("正在生成提交信息，请稍候...");
       return;
     }
 
@@ -57,7 +78,7 @@ export function activate(context: vscode.ExtensionContext): void {
     try {
       await vscode.window.withProgress(
         {
-          location: vscode.ProgressLocation.Notification,
+          location: vscode.ProgressLocation.Window,
           title: "正在生成提交信息",
           cancellable: false
         },
@@ -66,7 +87,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           const git = await getGitApi();
           if (!git || git.repositories.length === 0) {
-            vscode.window.showErrorMessage("当前工作区未检测到 Git 仓库。");
+            notifyStatus("当前工作区未检测到 Git 仓库。", "error");
             return;
           }
 
@@ -75,14 +96,14 @@ export function activate(context: vscode.ExtensionContext): void {
           const result = await buildCommitMessage(repo.rootUri.fsPath);
 
           if (!result.message) {
-            vscode.window.showWarningMessage("暂存区无变更，未生成提交信息。");
+            notifyStatus("暂存区无变更，未生成提交信息。", "warn");
             return;
           }
 
           progress.report({ message: "正在写入提交输入框..." });
           repo.inputBox.value = result.message;
           const sourceText = result.source === "ai" ? "AI" : "本地规则";
-          vscode.window.showInformationMessage(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
+          notifyStatus(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
 
           output.appendLine(`[result] source=${result.source} message="${result.message}"`);
           if (result.reason) {
@@ -92,8 +113,7 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`生成提交信息失败：${detail}`);
-      output.appendLine(`[error] ${detail}`);
+      notifyStatus(`生成提交信息失败：${detail}`, "error");
     } finally {
       isGenerating = false;
       statusBarItem.text = STATUS_IDLE_TEXT;
@@ -166,7 +186,7 @@ async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
 
 async function collectCommitContext(repoPath: string): Promise<CommitContext> {
   const stagedFiles = await runGit(repoPath, ["diff", "--cached", "--name-only"]);
-  const stagedList = toLines(stagedFiles);
+  const stagedList = toLines(stagedFiles).filter((file) => !isIgnoredCommitFile(file));
   if (stagedList.length === 0) {
     return { files: [], diff: "" };
   }
@@ -177,6 +197,11 @@ async function collectCommitContext(repoPath: string): Promise<CommitContext> {
     files: stagedList,
     diff: truncateMultiline(diff, MAX_DIFF_CHARS)
   };
+}
+
+function isIgnoredCommitFile(file: string): boolean {
+  const name = path.basename(file).toLowerCase();
+  return IGNORED_COMMIT_FILES.has(name);
 }
 
 async function generateWithOpenAI(context: CommitContext, style: ChineseStyle): Promise<string> {

@@ -55,6 +55,15 @@ try {
     throw "Expected VSIX not found: $vsixPath"
   }
 
+  $tagName = "v$packageVersion"
+  & git rev-parse -q --verify "refs/tags/$tagName" | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    throw "Tag already exists: $tagName"
+  }
+
+  Invoke-Step -Command "git" -Arguments @("tag", "-a", $tagName, "-m", "release $tagName")
+  Write-Host "Tag created: $tagName"
+
   Write-Host "Package completed: version $packageVersion"
   Write-Host "VSIX: $vsixPath"
 }

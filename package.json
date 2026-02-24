@@ -2,7 +2,7 @@
   "name": "commit-generator-zh-cn",
   "displayName": "commit-generator-zh-cn",
   "description": "在源代码管理中根据 Git 变更自动生成提交信息。",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "zuojinpu",
   "author": "zuojinpu",
   "license": "MIT",

@@ -213,7 +213,7 @@ npm run smoke:providers
 npm run release
 ```
 
-macOS/Linux 打包（自动升级版本、生成 VSIX、创建 tag）：
+macOS/Linux 打包（自动升级版本、生成 VSIX、创建并推送 tag）：
 
 ```bash
 # 默认升级 patch

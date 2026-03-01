@@ -20,6 +20,7 @@ Behavior:
   2) Compile extension
   3) Package VSIX
   4) Create git annotated tag: v<version>
+  5) Push tag to remote: origin
 EOF
 }
 
@@ -98,7 +99,9 @@ if git rev-parse -q --verify "refs/tags/${tag_name}" >/dev/null; then
 fi
 
 run_step git tag -a "$tag_name" -m "release $tag_name"
+run_step git push origin "$tag_name"
 
 echo "Tag created: $tag_name"
+echo "Tag pushed: $tag_name (origin)"
 echo "Package completed: version $package_version"
 echo "VSIX: $vsix_path"

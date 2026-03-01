@@ -20,7 +20,7 @@
 1. 打开一个 Git 仓库工作区。
 2. 打开 Source Control 视图。
 3. 先将要提交的改动加入暂存区（`git add`）。
-4. 点击 Source Control 标题栏按钮，或状态栏按钮 `生成提交信息`。
+4. 点击 Source Control 标题栏按钮 `生成提交信息`。
 5. 插件会生成并覆盖写入当前仓库的提交输入框。
 
 也可在命令面板执行命令 ID：`commitGenerator.generate`。

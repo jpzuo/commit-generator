@@ -31,8 +31,6 @@ interface BuildResult {
 
 const MAX_DIFF_CHARS = 12000;
 const output = vscode.window.createOutputChannel("Commit Generator");
-const STATUS_IDLE_TEXT = "$(sparkle) 生成提交信息";
-const STATUS_BUSY_TEXT = "$(sync~spin) 正在生成提交信息...";
 const INFO_TIMEOUT_MS = 3000;
 const WARN_TIMEOUT_MS = 5000;
 const ERROR_TIMEOUT_MS = 8000;
@@ -59,12 +57,6 @@ function notifyStatus(message: string, level: "info" | "warn" | "error" = "info"
 export function activate(context: vscode.ExtensionContext): void {
   let isGenerating = false;
 
-  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBarItem.text = STATUS_IDLE_TEXT;
-  statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
-  statusBarItem.command = "commitGenerator.generate";
-  statusBarItem.show();
-
   const disposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
     if (isGenerating) {
       notifyStatus("正在生成提交信息，请稍候...");
@@ -72,8 +64,6 @@ export function activate(context: vscode.ExtensionContext): void {
     }
 
     isGenerating = true;
-    statusBarItem.text = STATUS_BUSY_TEXT;
-    statusBarItem.tooltip = "正在生成中，请稍候...";
 
     try {
       await vscode.window.withProgress(
@@ -116,12 +106,10 @@ export function activate(context: vscode.ExtensionContext): void {
       notifyStatus(`生成提交信息失败：${detail}`, "error");
     } finally {
       isGenerating = false;
-      statusBarItem.text = STATUS_IDLE_TEXT;
-      statusBarItem.tooltip = "根据当前 Git 变更生成中文规范 Commit Message";
     }
   });
 
-  context.subscriptions.push(disposable, statusBarItem, output);
+  context.subscriptions.push(disposable, output);
 }
 
 export function deactivate(): void {

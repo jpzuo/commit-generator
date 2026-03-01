@@ -10,6 +10,7 @@
 - 标题格式固定为 `type(scope): subject` 或 `type: subject`
 - `type` 限定为 Conventional Commits 常见类型（`feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert`）
 - `subject` 要求简体中文、单行
+- 中文表达固定为“偏技术改动表达”模板
 - 默认优先调用 AI 生成；AI 不可用时自动回退本地规则生成
 - 仅基于当前暂存区（staged）变更生成（即已 `git add` 的内容）
 - 变更 diff 最多取前 12000 个字符参与生成，超出部分会截断
@@ -33,34 +34,108 @@
 
 在 VS Code 设置（`commitGenerator.*`）中配置：
 
-- `commitGenerator.apiKey`
-  - OpenAI 兼容中转服务的 API Key
-  - 若为空，回退到 `commitGenerator.openaiApiKey`，再回退到环境变量 `OPENAI_API_KEY`
-- `commitGenerator.openaiApiKey`
-  - OpenAI API Key（兼容老配置）
-- `commitGenerator.apiBaseUrl`（默认：`https://api.openai.com`）
-  - OpenAI 兼容接口地址
-- `commitGenerator.apiProtocol`（默认：`chatCompletions`）
-  - 可选：`chatCompletions` 或 `responses`
-- `commitGenerator.openaiModel`（默认：`gpt-4.1-mini`）
-  - 生成提交信息使用的模型名
-- `commitGenerator.chineseStyle`（默认：`engineering`）
-  - `engineering`：偏技术表达
-  - `business`：偏业务价值表达
-  - `concise`：偏简洁表达
+- `commitGenerator.providerProfiles`
+  - Provider 配置数组；每项结构：
+  - `id`：唯一标识
+  - `kind`：`openaiCompat` / `openaiResponses` / `anthropic` / `azureOpenai` / `gemini` / `ollama`
+  - `kind` 决定请求协议与解析方式，设置时会给出模型建议提示
+  - `model`：模型名
+  - `baseUrl`：接口地址（不同 provider 默认值不同）
+  - `apiKey`：API Key（可为空，回退环境变量）
+  - `envKey`：自定义环境变量名（可选）
+  - `enabled`：是否启用（默认 `true`）
+  - `timeoutMs`、`maxRetries`：可覆盖全局超时与重试
+  - `extraHeaders`：自定义请求头（用于网关/中转）
+  - `azureDeployment`、`azureApiVersion`：Azure OpenAI 专用
+  - `geminiApiVersion`：Gemini 专用
+- `commitGenerator.activeProfile`（默认：`default`）
+  - 首选 profile id
+- `commitGenerator.fallbackProfiles`（默认：`[]`）
+  - 回退链 profile id 顺序；为空时自动使用其余 enabled profile
+- `commitGenerator.requestTimeoutMs`（默认：`20000`）
+  - 全局请求超时（毫秒）
+  - 若未配置，会回退读取环境变量 `API_TIMEOUT_MS`
+- `commitGenerator.maxRetries`（默认：`2`）
+  - 可重试错误（429/5xx/超时）重试次数
+- `commitGenerator.logLevel`（默认：`normal`）
+  - `off`：关闭日志
+  - `normal`：结构化日志（脱敏）
+  - `debug`：额外输出请求调试信息（脱敏）
+  - `trace`：输出完整请求与响应日志
+- `commitGenerator.logRedactSensitive`（默认：`true`）
+  - 是否对日志中的密钥/鉴权字段做脱敏
+  - 需要完整排障时可临时设为 `false`
 
-配置示例（`settings.json`）：
+可通过命令面板执行 `commitGenerator.switchProviderProfile`，从已有配置中下拉选择当前 active profile。
+状态栏也会显示当前配置，点击即可下拉切换。
+
+### Provider Profiles 示例（`settings.json`）
 
 ```json
 {
-  // 可替换为你的 OpenAI 兼容服务地址，兼容任何第三方openAI格式
-  "commitGenerator.apiBaseUrl": "https://api.openai.com",
-  "commitGenerator.apiKey": "sk-xxxx",
-  "commitGenerator.apiProtocol": "chatCompletions",
-  "commitGenerator.openaiModel": "GLM",
-  "commitGenerator.chineseStyle": "engineering",
+  "commitGenerator.providerProfiles": [
+    {
+      "id": "openai-main",
+      "kind": "openaiCompat",
+      "model": "gpt-4.1-mini",
+      "baseUrl": "https://api.openai.com",
+      "apiKey": "sk-xxxx"
+    },
+    {
+      "id": "claude-fallback",
+      "kind": "anthropic",
+      "model": "claude-3-5-sonnet-latest",
+      "baseUrl": "https://api.anthropic.com",
+      "envKey": "ANTHROPIC_AUTH_TOKEN"
+    },
+    {
+      "id": "gemini-fallback",
+      "kind": "gemini",
+      "model": "gemini-1.5-flash",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "envKey": "GEMINI_API_KEY"
+    },
+    {
+      "id": "local-ollama",
+      "kind": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "baseUrl": "http://127.0.0.1:11434",
+      "enabled": true
+    }
+  ],
+  "commitGenerator.activeProfile": "openai-main",
+  "commitGenerator.fallbackProfiles": ["claude-fallback", "gemini-fallback", "local-ollama"],
+  "commitGenerator.requestTimeoutMs": 20000,
+  "commitGenerator.maxRetries": 2,
+  "commitGenerator.logLevel": "normal",
+  "commitGenerator.logRedactSensitive": true
 }
 ```
+
+Azure OpenAI 示例：
+
+```json
+{
+  "commitGenerator.providerProfiles": [
+    {
+      "id": "azure-main",
+      "kind": "azureOpenai",
+      "model": "gpt-4o-mini",
+      "baseUrl": "https://<your-resource>.openai.azure.com",
+      "apiKey": "<azure-api-key>",
+      "azureDeployment": "<deployment-name>",
+      "azureApiVersion": "2024-10-21"
+    }
+  ],
+  "commitGenerator.activeProfile": "azure-main"
+}
+```
+
+### 旧配置兼容与迁移
+
+- 旧键 `apiKey/openaiApiKey/apiBaseUrl/apiProtocol/openaiModel` 仍可使用。
+- 当 `providerProfiles` 为空时，插件会自动把旧键映射为一个兼容 profile。
+- 建议逐步迁移到 `providerProfiles`，以获得多 provider 回退和快速切换能力。
 
 ## 打包
 
@@ -77,6 +152,41 @@ powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1 -ReleaseType mino
 ```
 
 执行后会在项目根目录生成 `*.vsix` 安装包。
+
+## 测试
+
+- 运行单元测试：
+
+```bash
+npm test
+```
+
+- 运行 provider 真实接口烟测（按环境变量自动跳过未配置 provider）：
+
+```bash
+npm run smoke:providers
+```
+
+常用环境变量：
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN`（Anthropic 网关优先）
+- `ANTHROPIC_API_KEY`（Anthropic 兼容）
+- `ANTHROPIC_BASE_URL`（Anthropic 默认 baseUrl）
+- `ANTHROPIC_MODEL`（Anthropic 默认模型）
+- `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_BASE_URL` + `AZURE_OPENAI_DEPLOYMENT`
+- `GEMINI_API_KEY`
+- `API_TIMEOUT_MS`（全局超时回退）
+- `OLLAMA_SMOKE=1`（可选，默认跳过本地 Ollama）
+
+完整流量日志排障建议（Output -> Commit Generator）：
+
+```json
+{
+  "commitGenerator.logLevel": "trace",
+  "commitGenerator.logRedactSensitive": false
+}
+```
 
 ## 问题反馈
 

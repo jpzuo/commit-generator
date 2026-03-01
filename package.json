@@ -31,6 +31,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:commitGenerator.generate",
+    "onCommand:commitGenerator.switchProviderProfile",
     "workspaceContains:.git"
   ],
   "extensionDependencies": [
@@ -48,49 +49,170 @@
           "light": "media/wand-light.svg",
           "dark": "media/wand-dark.svg"
         }
+      },
+      {
+        "command": "commitGenerator.switchProviderProfile",
+        "title": "下拉选择当前 AI 配置",
+        "category": "提交信息生成器"
       }
     ],
     "configuration": {
       "title": "提交信息生成器",
       "properties": {
+        "commitGenerator.providerProfiles": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Provider 配置列表。建议通过 `下拉选择当前 AI 配置` 命令在已有配置中切换 active profile。",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "markdownDescription": "配置标识符（唯一）。例如：`openai-main`、`anthropic-fallback`。"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "openaiCompat",
+                  "openaiResponses",
+                  "anthropic",
+                  "azureOpenai",
+                  "gemini",
+                  "ollama"
+                ],
+                "markdownDescription": "Provider 类型：`openaiCompat`(Chat Completions), `openaiResponses`, `anthropic`, `azureOpenai`, `gemini`, `ollama`。"
+              },
+              "model": {
+                "type": "string",
+                "markdownDescription": "模型名。推荐：openai=`gpt-4.1-mini`，anthropic=`claude-3-5-sonnet-latest`，gemini=`gemini-1.5-flash`，ollama=`qwen2.5-coder:7b`。"
+              },
+              "baseUrl": {
+                "type": "string",
+                "markdownDescription": "接口基础地址。openai 默认 `https://api.openai.com`，anthropic 默认 `https://api.anthropic.com`。"
+              },
+              "apiKey": {
+                "type": "string",
+                "markdownDescription": "API Key。为空时按 kind 回退读取环境变量。"
+              },
+              "envKey": {
+                "type": "string",
+                "markdownDescription": "自定义环境变量名（可选）。用于覆盖默认环境变量读取顺序。"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true,
+                "markdownDescription": "是否启用该配置。"
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 1000,
+                "markdownDescription": "单配置请求超时（毫秒），可覆盖全局 `requestTimeoutMs`。"
+              },
+              "maxRetries": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5,
+                "markdownDescription": "单配置重试次数，可覆盖全局 `maxRetries`。"
+              },
+              "extraHeaders": {
+                "type": "object",
+                "markdownDescription": "额外请求头（用于中转网关）。键和值都应为字符串。"
+              },
+              "azureDeployment": {
+                "type": "string",
+                "markdownDescription": "`kind=azureOpenai` 时必填。"
+              },
+              "azureApiVersion": {
+                "type": "string",
+                "markdownDescription": "Azure API 版本，默认 `2024-10-21`。"
+              },
+              "geminiApiVersion": {
+                "type": "string",
+                "markdownDescription": "Gemini API 版本，默认 `v1beta`。"
+              }
+            }
+          }
+        },
+        "commitGenerator.activeProfile": {
+          "type": "string",
+          "default": "default",
+          "markdownDescription": "当前优先使用的 profile id。可通过命令 `下拉选择当前 AI 配置` 从已有配置中选择。"
+        },
+        "commitGenerator.fallbackProfiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "回退链 profile id 顺序。为空时会自动使用其余 enabled profile。"
+        },
+        "commitGenerator.requestTimeoutMs": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 1000,
+          "markdownDescription": "请求超时时间（毫秒）。"
+        },
+        "commitGenerator.maxRetries": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "markdownDescription": "可重试错误（429/5xx/超时）时的最大重试次数。"
+        },
+        "commitGenerator.logLevel": {
+          "type": "string",
+          "enum": [
+            "off",
+            "normal",
+            "debug",
+            "trace"
+          ],
+          "default": "normal",
+          "markdownDescription": "日志级别。`normal` 记录结构化成功/失败日志；`debug` 输出更多请求信息；`trace` 输出完整请求与响应日志。"
+        },
+        "commitGenerator.logRedactSensitive": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "是否对日志中的密钥/鉴权字段做脱敏。调试完整请求响应时可临时关闭。"
+        },
         "commitGenerator.openaiApiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "用于生成提交信息的 OpenAI API Key。为空时会使用环境变量 `OPENAI_API_KEY`。"
+          "markdownDescription": "旧配置兼容项。用于生成提交信息的 OpenAI API Key。为空时会使用环境变量 `OPENAI_API_KEY`。",
+          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].apiKey。"
         },
         "commitGenerator.apiKey": {
           "type": "string",
           "default": "",
-          "markdownDescription": "OpenAI 兼容中转服务的 API Key。为空时会依次回退到 `commitGenerator.openaiApiKey` 和 `OPENAI_API_KEY`。"
+          "markdownDescription": "旧配置兼容项。OpenAI 兼容中转服务的 API Key。为空时会依次回退到 `commitGenerator.openaiApiKey` 和 `OPENAI_API_KEY`。",
+          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].apiKey。"
         },
         "commitGenerator.apiBaseUrl": {
           "type": "string",
           "default": "https://api.openai.com",
-          "markdownDescription": "OpenAI 兼容接口的基础地址，例如 `https://api.openai.com` 或你的中转地址。"
+          "markdownDescription": "旧配置兼容项。OpenAI 兼容接口的基础地址，例如 `https://api.openai.com` 或你的中转地址。",
+          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].baseUrl。"
         },
         "commitGenerator.apiProtocol": {
           "type": "string",
           "enum": [
             "chatCompletions",
-            "responses"
+            "responses",
+            "anthropicMessages"
           ],
           "default": "chatCompletions",
-          "markdownDescription": "接口协议类型。大多数中转服务使用 `chatCompletions`。"
+          "markdownDescription": "旧配置兼容项。接口协议类型。OpenAI 兼容中转通常使用 `chatCompletions`；Claude 官方接口使用 `anthropicMessages`。",
+          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].kind。"
         },
         "commitGenerator.openaiModel": {
           "type": "string",
           "default": "gpt-4.1-mini",
-          "markdownDescription": "用于生成提交信息的 OpenAI 模型。"
-        },
-        "commitGenerator.chineseStyle": {
-          "type": "string",
-          "enum": [
-            "business",
-            "engineering",
-            "concise"
-          ],
-          "default": "engineering",
-          "markdownDescription": "中文提交风格模板。`business`：偏业务价值表达；`engineering`：偏技术改动表达；`concise`：简洁直接表达。"
+          "markdownDescription": "旧配置兼容项。用于生成提交信息的 OpenAI 模型。",
+          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].model。"
         }
       }
     },
@@ -105,12 +227,17 @@
       "commandPalette": [
         {
           "command": "commitGenerator.generate"
+        },
+        {
+          "command": "commitGenerator.switchProviderProfile"
         }
       ]
     }
   },
   "scripts": {
     "compile": "tsc -p ./",
+    "test": "npm run compile && node --test test/**/*.test.cjs",
+    "smoke:providers": "npm run compile && node ./scripts/smoke-providers.cjs",
     "watch": "tsc -watch -p ./",
     "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1"
   },

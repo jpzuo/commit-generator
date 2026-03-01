@@ -1,7 +1,9 @@
 ﻿import * as cp from "node:child_process";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { executeProviderChain, summarizeFailures } from "./ai/executor";
+import { LogLevel, StructuredLogEntry, StructuredLogger } from "./ai/types";
+import { RawExtensionSettings, ResolvedExtensionSettings, resolveExtensionSettings } from "./config/settings";
 
 interface GitRepository {
   rootUri: vscode.Uri;
@@ -19,9 +21,7 @@ interface CommitContext {
   diff: string;
 }
 
-type ChineseStyle = "business" | "engineering" | "concise";
 type MessageSource = "ai" | "fallback";
-type ApiProtocol = "chatCompletions" | "responses";
 
 interface BuildResult {
   message: string;
@@ -34,6 +34,8 @@ const output = vscode.window.createOutputChannel("Commit Generator");
 const INFO_TIMEOUT_MS = 3000;
 const WARN_TIMEOUT_MS = 5000;
 const ERROR_TIMEOUT_MS = 8000;
+const STATUS_BAR_PRIORITY = 100;
+let hasShownLegacyConfigWarning = false;
 const IGNORED_COMMIT_FILES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -56,8 +58,12 @@ function notifyStatus(message: string, level: "info" | "warn" | "error" = "info"
 
 export function activate(context: vscode.ExtensionContext): void {
   let isGenerating = false;
+  const profileStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, STATUS_BAR_PRIORITY);
+  profileStatusBar.command = "commitGenerator.switchProviderProfile";
+  profileStatusBar.show();
+  updateActiveProfileStatusBar(profileStatusBar);
 
-  const disposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
+  const generateDisposable = vscode.commands.registerCommand("commitGenerator.generate", async () => {
     if (isGenerating) {
       notifyStatus("正在生成提交信息，请稍候...");
       return;
@@ -92,8 +98,11 @@ export function activate(context: vscode.ExtensionContext): void {
 
           progress.report({ message: "正在写入提交输入框..." });
           repo.inputBox.value = result.message;
-          const sourceText = result.source === "ai" ? "AI" : "本地规则";
-          notifyStatus(`已生成提交信息并覆盖输入框（来源：${sourceText}）。`);
+          if (result.source === "ai") {
+            notifyStatus("已生成提交信息并覆盖输入框（来源：AI）。");
+          } else {
+            notifyStatus("AI 不可用，已回退本地规则生成。可在输出面板查看失败原因。", "warn");
+          }
 
           output.appendLine(`[result] source=${result.source} message="${result.message}"`);
           if (result.reason) {
@@ -109,7 +118,25 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  context.subscriptions.push(disposable, output);
+  const switchProfileDisposable = vscode.commands.registerCommand("commitGenerator.switchProviderProfile", async () => {
+    try {
+      const switched = await switchProviderProfile();
+      if (switched) {
+        updateActiveProfileStatusBar(profileStatusBar);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      notifyStatus(`切换 Provider 配置失败：${detail}`, "error");
+    }
+  });
+
+  const settingsChangeDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
+    if (event.affectsConfiguration("commitGenerator.providerProfiles") || event.affectsConfiguration("commitGenerator.activeProfile")) {
+      updateActiveProfileStatusBar(profileStatusBar);
+    }
+  });
+
+  context.subscriptions.push(generateDisposable, switchProfileDisposable, settingsChangeDisposable, profileStatusBar, output);
 }
 
 export function deactivate(): void {
@@ -141,15 +168,67 @@ function pickRepository(repositories: GitRepository[]): GitRepository {
   return match ?? repositories[0];
 }
 
+async function switchProviderProfile(): Promise<boolean> {
+  const settings = loadResolvedSettings();
+  const candidates = settings.profiles.filter((profile) => profile.enabled);
+  if (candidates.length === 0) {
+    notifyStatus("当前没有可用的 Provider Profile。", "warn");
+    return false;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    candidates.map((profile) => ({
+      label: profile.id,
+      description: profile.id === settings.activeProfile ? `${profile.kind} (当前)` : profile.kind,
+      detail: `model=${profile.model} | baseUrl=${profile.baseUrl}`,
+      profile
+    })),
+    {
+      title: "切换 AI Provider 配置",
+      placeHolder: `当前 activeProfile：${settings.activeProfile || "未设置"}`
+    }
+  );
+
+  if (!picked) {
+    return false;
+  }
+
+  const config = vscode.workspace.getConfiguration("commitGenerator");
+  const target =
+    vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
+
+  await config.update("activeProfile", picked.profile.id, target);
+  notifyStatus(`已切换 Provider 配置：${picked.profile.id}`);
+  output.appendLine(`[config] activeProfile=${picked.profile.id}`);
+  return true;
+}
+
+function updateActiveProfileStatusBar(statusBar: vscode.StatusBarItem): void {
+  const settings = loadResolvedSettings();
+  const activeProfile = settings.activeProfile || "未设置";
+  const enabledCount = settings.profiles.filter((profile) => profile.enabled).length;
+
+  if (enabledCount === 0) {
+    statusBar.text = "$(warning) Commit AI: 无可用配置";
+    statusBar.tooltip = "未检测到可用 providerProfiles，点击可尝试从已有配置中选择。";
+    return;
+  }
+
+  statusBar.text = `$(list-selection) Commit AI: ${activeProfile}`;
+  statusBar.tooltip = `当前配置：${activeProfile}\n点击从已有配置中下拉选择。`;
+}
+
 async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
-  const style = getChineseStyle();
   const context = await collectCommitContext(repoPath);
   if (context.files.length === 0) {
     return { message: "", source: "fallback", reason: "no_changes" };
   }
 
   try {
-    let aiMessage = await generateWithOpenAI(context, style);
+    const aiResult = await generateWithProviders(context);
+    let aiMessage = aiResult.message;
     if (aiMessage) {
       if (!hasCommitBody(aiMessage)) {
         aiMessage = `${aiMessage}\n\n${buildDetailedBody(context.files, context.diff)}`;
@@ -158,14 +237,14 @@ async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
     }
 
     return {
-      message: buildRuleBasedMessage(context.files, context.diff, style),
+      message: buildRuleBasedMessage(context.files, context.diff),
       source: "fallback",
-      reason: "ai_empty_or_invalid"
+      reason: aiResult.reason ?? "ai_empty_or_invalid"
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {
-      message: buildRuleBasedMessage(context.files, context.diff, style),
+      message: buildRuleBasedMessage(context.files, context.diff),
       source: "fallback",
       reason: `ai_error: ${detail}`
     };
@@ -192,65 +271,146 @@ function isIgnoredCommitFile(file: string): boolean {
   return IGNORED_COMMIT_FILES.has(name);
 }
 
-async function generateWithOpenAI(context: CommitContext, style: ChineseStyle): Promise<string> {
-  const config = vscode.workspace.getConfiguration("commitGenerator");
-  const apiKey =
-    String(config.get<string>("apiKey", "")).trim() ||
-    String(config.get<string>("openaiApiKey", "")).trim() ||
-    process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
-    throw new Error("未配置 API Key（commitGenerator.apiKey / commitGenerator.openaiApiKey / OPENAI_API_KEY）。");
-  }
+async function generateWithProviders(context: CommitContext): Promise<{ message: string; reason?: string }> {
+  const settings = loadResolvedSettings();
+  logSettingsDiagnostics(settings);
 
-  const baseUrl = normalizeBaseUrl(String(config.get<string>("apiBaseUrl", "https://api.openai.com")).trim());
-  const apiProtocol = getApiProtocol();
-  const model = String(config.get<string>("openaiModel", "gpt-4.1-mini")).trim() || "gpt-4.1-mini";
-  const prompt = createPrompt(context, style);
-  const endpoint = apiProtocol === "responses" ? `${baseUrl}/v1/responses` : `${baseUrl}/v1/chat/completions`;
-
-  const body =
-    apiProtocol === "responses"
-      ? {
-          model,
-          input: prompt,
-          temperature: 0.2
-        }
-      : {
-          model,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0.2
-        };
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`AI API error (${response.status}) [${endpoint}]: ${errorText}`);
-  }
-
-  if (apiProtocol === "responses") {
-    const data = (await response.json()) as {
-      output_text?: string;
-      output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
+  if (settings.executionOrder.length === 0) {
+    return {
+      message: "",
+      reason: "no_enabled_profiles"
     };
-    return normalizeMessage(extractResponseText(data));
   }
 
-  const chatData = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
+  const prompt = createPrompt(context);
+  const logger = createStructuredLogger(settings.logLevel, settings.logRedactSensitive);
+  const result = await executeProviderChain(
+    {
+      profiles: settings.executionOrder,
+      prompt,
+      transformMessage: normalizeMessage
+    },
+    logger
+  );
+
+  if (result.success) {
+    output.appendLine(
+      `[ai-success] provider=${result.success.provider} profile=${result.success.profileId} endpoint=${result.success.endpoint} latencyMs=${result.success.latencyMs}`
+    );
+    return { message: result.success.message };
+  }
+
+  return {
+    message: "",
+    reason: summarizeFailures(result.failures) || "all_providers_failed"
   };
-  return normalizeMessage(extractChatCompletionsText(chatData));
 }
 
-function createPrompt(context: CommitContext, style: ChineseStyle): string {
-  const styleInstruction = getStyleInstruction(style);
+function loadResolvedSettings(): ResolvedExtensionSettings {
+  return resolveExtensionSettings(readRawExtensionSettings(), process.env);
+}
+
+function readRawExtensionSettings(): RawExtensionSettings {
+  const config = vscode.workspace.getConfiguration("commitGenerator");
+  return {
+    providerProfiles: config.get<unknown>("providerProfiles"),
+    activeProfile: config.get<unknown>("activeProfile"),
+    fallbackProfiles: config.get<unknown>("fallbackProfiles"),
+    requestTimeoutMs: config.get<unknown>("requestTimeoutMs"),
+    maxRetries: config.get<unknown>("maxRetries"),
+    logLevel: config.get<unknown>("logLevel"),
+    logRedactSensitive: config.get<unknown>("logRedactSensitive"),
+    apiKey: config.get<unknown>("apiKey"),
+    openaiApiKey: config.get<unknown>("openaiApiKey"),
+    apiBaseUrl: config.get<unknown>("apiBaseUrl"),
+    apiProtocol: config.get<unknown>("apiProtocol"),
+    openaiModel: config.get<unknown>("openaiModel")
+  };
+}
+
+function logSettingsDiagnostics(settings: ResolvedExtensionSettings): void {
+  if (settings.usedLegacyConfig && !hasShownLegacyConfigWarning) {
+    hasShownLegacyConfigWarning = true;
+    output.appendLine(
+      "[warn] 检测到旧配置键，当前已自动兼容映射。建议迁移到 commitGenerator.providerProfiles。"
+    );
+  }
+
+  for (const warning of settings.warnings) {
+    output.appendLine(`[warn] [config] ${warning}`);
+  }
+
+  output.appendLine(
+    `[config] active=${settings.activeProfile || "none"} order=${settings.executionOrder.map((profile) => profile.id).join(" -> ")}`
+  );
+  output.appendLine(
+    `[config] logLevel=${settings.logLevel} logRedactSensitive=${String(settings.logRedactSensitive)}`
+  );
+}
+
+function createStructuredLogger(logLevel: LogLevel, redactSensitive: boolean): StructuredLogger {
+  return {
+    log(entry: StructuredLogEntry): void {
+      if (!shouldWriteLog(logLevel, entry.level)) {
+        return;
+      }
+      const payload = entry.meta ? (redactSensitive ? redactMeta(entry.meta) : entry.meta) : undefined;
+      const serializedMeta = payload ? ` ${JSON.stringify(payload)}` : "";
+      output.appendLine(`[${entry.level}] ${entry.message}${serializedMeta}`);
+    }
+  };
+}
+
+function shouldWriteLog(logLevel: LogLevel, level: StructuredLogEntry["level"]): boolean {
+  if (logLevel === "off") {
+    return false;
+  }
+  if (logLevel === "normal" && (level === "debug" || level === "trace")) {
+    return false;
+  }
+  if (logLevel === "debug" && level === "trace") {
+    return false;
+  }
+  return true;
+}
+
+function redactMeta(meta: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(meta)) {
+    result[key] = redactUnknown(value, key);
+  }
+  return result;
+}
+
+function redactUnknown(value: unknown, keyHint: string): unknown {
+  if (isSensitiveKey(keyHint)) {
+    return "***";
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactUnknown(item, ""));
+  }
+
+  if (isRecord(value)) {
+    const redacted: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) {
+      redacted[key] = redactUnknown(item, key);
+    }
+    return redacted;
+  }
+
+  return value;
+}
+
+function isSensitiveKey(key: string): boolean {
+  return /api[-_]?key|authorization|token|secret|password/i.test(key);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function createPrompt(context: CommitContext): string {
   return [
     "你是一名资深工程师，负责生成 git 提交信息。",
     "输出格式必须是：第一行标题 + 空行 + 详细正文。",
@@ -258,7 +418,7 @@ function createPrompt(context: CommitContext, style: ChineseStyle): string {
     "描述具体改动，改动按分类以 - 开头。",// 、影响范围和注意事项
     "type 必须是英文小写（feat/fix/docs/style/refactor/perf/test/chore/build/ci/revert）。",
     "subject 必须是简体中文，使用动宾短语，禁止英文句子、禁止句号。",
-    `中文风格要求：${styleInstruction}`,
+    "中文风格要求：突出技术改动本身，例如“重构”“调整”“完善”“补充”。",
     "",
     "变更文件：",
     context.files.join("\n"),
@@ -266,47 +426,6 @@ function createPrompt(context: CommitContext, style: ChineseStyle): string {
     "代码差异：",
     context.diff
   ].join("\n");
-}
-
-function extractResponseText(data: {
-  output_text?: string;
-  output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
-}): string {
-  if (data.output_text && data.output_text.trim().length > 0) {
-    return data.output_text;
-  }
-
-  for (const item of data.output ?? []) {
-    for (const chunk of item.content ?? []) {
-      if (chunk.type === "output_text" && chunk.text) {
-        return chunk.text;
-      }
-      if (chunk.text) {
-        return chunk.text;
-      }
-    }
-  }
-
-  return "";
-}
-
-function extractChatCompletionsText(data: {
-  choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
-}): string {
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    for (const chunk of content) {
-      if (chunk.text) {
-        return chunk.text;
-      }
-    }
-  }
-
-  return "";
 }
 
 function normalizeMessage(value: string): string {
@@ -373,10 +492,10 @@ function hasCommitBody(message: string): boolean {
   return parts.length > 1 && parts[1].trim().length > 0;
 }
 
-function buildRuleBasedMessage(files: string[], patch: string, style: ChineseStyle): string {
+function buildRuleBasedMessage(files: string[], patch: string): string {
   const type = inferType(files, patch);
   const scope = inferScope(files);
-  const subject = inferSubject(files, patch, style);
+  const subject = inferSubject(files, patch);
   const header = scope ? `${type}(${scope}): ${subject}` : `${type}: ${subject}`;
   const body = buildDetailedBody(files, patch);
 
@@ -461,14 +580,14 @@ function sanitizeScope(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
-function inferSubject(files: string[], patch: string, style: ChineseStyle): string {
-  const semanticSubject = inferSemanticSubject(files, patch, style);
+function inferSubject(files: string[], patch: string): string {
+  const semanticSubject = inferSemanticSubject(files, patch);
   if (semanticSubject) {
     return semanticSubject;
   }
 
   if (files.length === 1) {
-    return formatSubject(style, path.basename(files[0]), 1, "");
+    return formatSubject(path.basename(files[0]), 1, "");
   }
 
   const dirs = uniq(
@@ -479,35 +598,35 @@ function inferSubject(files: string[], patch: string, style: ChineseStyle): stri
   );
 
   if (dirs.length === 1) {
-    return formatSubject(style, "", files.length, dirs[0]);
+    return formatSubject("", files.length, dirs[0]);
   }
 
-  return formatSubject(style, "", files.length, "");
+  return formatSubject("", files.length, "");
 }
 
-function inferSemanticSubject(files: string[], patch: string, style: ChineseStyle): string {
+function inferSemanticSubject(files: string[], patch: string): string {
   const text = `${files.join("\n")}\n${patch}`.toLowerCase();
   const uniqueTargets = collectSemanticTargets(text, files).slice(0, 2);
   if (uniqueTargets.length === 0) {
     return "";
   }
 
-  const action = inferAction(text, style);
-  return style === "concise" ? `${action}${uniqueTargets.join("和")}` : `${action}${uniqueTargets.join("并")}`;
+  const action = inferAction(text);
+  return `${action}${uniqueTargets.join("并")}`;
 }
 
-function inferAction(text: string, style: ChineseStyle): string {
+function inferAction(text: string): string {
   if (text.includes("fix") || text.includes("bug") || text.includes("error") || text.includes("异常")) {
-    return style === "business" ? "修复" : "修正";
+    return "修正";
   }
   if (text.includes("add") || text.includes("new file") || text.includes("+++")) {
-    return style === "business" ? "新增" : "增加";
+    return "增加";
   }
   if (text.includes("refactor")) {
-    return style === "business" ? "优化" : "重构";
+    return "重构";
   }
 
-  return style === "business" ? "优化" : "调整";
+  return "调整";
 }
 
 function buildDetailedBody(files: string[], patch: string): string {
@@ -587,59 +706,7 @@ function isValidConventionalCommit(message: string): boolean {
   return hasChinese;
 }
 
-function getChineseStyle(): ChineseStyle {
-  const config = vscode.workspace.getConfiguration("commitGenerator");
-  const value = String(config.get<string>("chineseStyle", "engineering")).trim();
-  if (value === "business" || value === "engineering" || value === "concise") {
-    return value;
-  }
-  return "engineering";
-}
-
-function getApiProtocol(): ApiProtocol {
-  const config = vscode.workspace.getConfiguration("commitGenerator");
-  const value = String(config.get<string>("apiProtocol", "chatCompletions")).trim();
-  return value === "responses" ? "responses" : "chatCompletions";
-}
-
-function normalizeBaseUrl(url: string): string {
-  if (!url) {
-    return "https://api.openai.com";
-  }
-  return url.replace(/\/+$/, "");
-}
-
-function getStyleInstruction(style: ChineseStyle): string {
-  if (style === "business") {
-    return "突出业务价值和用户收益，例如“新增”“优化”“修复某场景问题”";
-  }
-  if (style === "concise") {
-    return "用词尽量精炼，控制在 8-16 个汉字";
-  }
-  return "突出技术改动本身，例如“重构”“调整”“完善”“补充”";
-}
-
-function formatSubject(style: ChineseStyle, fileName: string, fileCount: number, dir: string): string {
-  if (style === "business") {
-    if (fileName) {
-      return `优化 ${fileName} 相关功能`;
-    }
-    if (dir) {
-      return `完善 ${dir} 模块功能实现`;
-    }
-    return "优化多处功能实现";
-  }
-
-  if (style === "concise") {
-    if (fileName) {
-      return `更新 ${fileName}`;
-    }
-    if (dir) {
-      return `更新 ${dir} 模块`;
-    }
-    return `更新 ${fileCount} 个文件`;
-  }
-
+function formatSubject(fileName: string, fileCount: number, dir: string): string {
   if (fileName) {
     return `更新 ${fileName} 实现`;
   }

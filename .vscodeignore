@@ -4,3 +4,6 @@
 src/**
 tsconfig.json
 **/*.map
+test/**
+scripts/**
+info.txt

@@ -2,7 +2,7 @@
   "name": "commit-generator-zh-cn",
   "displayName": "commit-generator-zh-cn",
   "description": "在源代码管理中根据 Git 变更自动生成提交信息。",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "zuojinpu",
   "author": "zuojinpu",
   "license": "MIT",
@@ -239,7 +239,8 @@
     "test": "npm run compile && node --test test/**/*.test.cjs",
     "smoke:providers": "npm run compile && node ./scripts/smoke-providers.cjs",
     "watch": "tsc -watch -p ./",
-    "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1"
+    "release": "powershell -ExecutionPolicy Bypass -File ./scripts/release.ps1",
+    "release:mac": "bash ./scripts/release.sh"
   },
   "devDependencies": {
     "@types/node": "^20.14.2",

@@ -213,6 +213,20 @@ npm run smoke:providers
 npm run release
 ```
 
+macOS/Linux 打包（自动升级版本、生成 VSIX、创建 tag）：
+
+```bash
+# 默认升级 patch
+npm run release:mac
+
+# 指定升级 minor/major
+bash ./scripts/release.sh minor
+bash ./scripts/release.sh major
+
+# 指定版本号
+bash ./scripts/release.sh --version 0.2.0
+```
+
 ## 问题反馈
 
 - 邮箱：`zuojinpu@qq.com`

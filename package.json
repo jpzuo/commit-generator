@@ -62,7 +62,7 @@
         "commitGenerator.providerProfiles": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Provider 配置列表。建议通过 `下拉选择当前 AI 配置` 命令在已有配置中切换 active profile。",
+          "markdownDescription": "Provider 配置列表（必填）。仅支持该新配置格式；建议通过 `下拉选择当前 AI 配置` 命令在已有配置中切换 active profile。",
           "items": {
             "type": "object",
             "required": [
@@ -178,41 +178,6 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "是否对日志中的密钥/鉴权字段做脱敏。调试完整请求响应时可临时关闭。"
-        },
-        "commitGenerator.openaiApiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "旧配置兼容项。用于生成提交信息的 OpenAI API Key。为空时会使用环境变量 `OPENAI_API_KEY`。",
-          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].apiKey。"
-        },
-        "commitGenerator.apiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "旧配置兼容项。OpenAI 兼容中转服务的 API Key。为空时会依次回退到 `commitGenerator.openaiApiKey` 和 `OPENAI_API_KEY`。",
-          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].apiKey。"
-        },
-        "commitGenerator.apiBaseUrl": {
-          "type": "string",
-          "default": "https://api.openai.com",
-          "markdownDescription": "旧配置兼容项。OpenAI 兼容接口的基础地址，例如 `https://api.openai.com` 或你的中转地址。",
-          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].baseUrl。"
-        },
-        "commitGenerator.apiProtocol": {
-          "type": "string",
-          "enum": [
-            "chatCompletions",
-            "responses",
-            "anthropicMessages"
-          ],
-          "default": "chatCompletions",
-          "markdownDescription": "旧配置兼容项。接口协议类型。OpenAI 兼容中转通常使用 `chatCompletions`；Claude 官方接口使用 `anthropicMessages`。",
-          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].kind。"
-        },
-        "commitGenerator.openaiModel": {
-          "type": "string",
-          "default": "gpt-4.1-mini",
-          "markdownDescription": "旧配置兼容项。用于生成提交信息的 OpenAI 模型。",
-          "deprecationMessage": "建议迁移到 commitGenerator.providerProfiles[].model。"
         }
       }
     },

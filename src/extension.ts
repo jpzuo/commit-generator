@@ -35,7 +35,6 @@ const INFO_TIMEOUT_MS = 3000;
 const WARN_TIMEOUT_MS = 5000;
 const ERROR_TIMEOUT_MS = 8000;
 const STATUS_BAR_PRIORITY = 100;
-let hasShownLegacyConfigWarning = false;
 const IGNORED_COMMIT_FILES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -194,14 +193,9 @@ async function switchProviderProfile(): Promise<boolean> {
   }
 
   const config = vscode.workspace.getConfiguration("commitGenerator");
-  const target =
-    vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0
-      ? vscode.ConfigurationTarget.Workspace
-      : vscode.ConfigurationTarget.Global;
-
-  await config.update("activeProfile", picked.profile.id, target);
+  await config.update("activeProfile", picked.profile.id, vscode.ConfigurationTarget.Global);
   notifyStatus(`已切换 Provider 配置：${picked.profile.id}`);
-  output.appendLine(`[config] activeProfile=${picked.profile.id}`);
+  output.appendLine(`[config] activeProfile=${picked.profile.id} target=user`);
   return true;
 }
 
@@ -319,23 +313,11 @@ function readRawExtensionSettings(): RawExtensionSettings {
     requestTimeoutMs: config.get<unknown>("requestTimeoutMs"),
     maxRetries: config.get<unknown>("maxRetries"),
     logLevel: config.get<unknown>("logLevel"),
-    logRedactSensitive: config.get<unknown>("logRedactSensitive"),
-    apiKey: config.get<unknown>("apiKey"),
-    openaiApiKey: config.get<unknown>("openaiApiKey"),
-    apiBaseUrl: config.get<unknown>("apiBaseUrl"),
-    apiProtocol: config.get<unknown>("apiProtocol"),
-    openaiModel: config.get<unknown>("openaiModel")
+    logRedactSensitive: config.get<unknown>("logRedactSensitive")
   };
 }
 
 function logSettingsDiagnostics(settings: ResolvedExtensionSettings): void {
-  if (settings.usedLegacyConfig && !hasShownLegacyConfigWarning) {
-    hasShownLegacyConfigWarning = true;
-    output.appendLine(
-      "[warn] 检测到旧配置键，当前已自动兼容映射。建议迁移到 commitGenerator.providerProfiles。"
-    );
-  }
-
   for (const warning of settings.warnings) {
     output.appendLine(`[warn] [config] ${warning}`);
   }

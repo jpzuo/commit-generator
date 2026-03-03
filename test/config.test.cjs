@@ -23,7 +23,22 @@ test("resolveExtensionSettings builds provider order with active + fallback + re
   );
 });
 
-test("resolveExtensionSettings maps legacy fields when providerProfiles is empty", () => {
+test("resolveExtensionSettings does not warn for default activeProfile placeholder", () => {
+  const settings = resolveExtensionSettings(
+    {
+      providerProfiles: [
+        { id: "openai-main", kind: "openaiCompat", model: "gpt-4.1-mini", enabled: true },
+        { id: "gemini-backup", kind: "gemini", model: "gemini-1.5-flash", enabled: true }
+      ]
+    },
+    {}
+  );
+
+  assert.equal(settings.activeProfile, "openai-main");
+  assert.equal(settings.warnings.some((warning) => warning.includes("activeProfile=")), false);
+});
+
+test("resolveExtensionSettings no longer maps legacy fields when providerProfiles is empty", () => {
   const settings = resolveExtensionSettings(
     {
       apiProtocol: "anthropicMessages",
@@ -33,11 +48,9 @@ test("resolveExtensionSettings maps legacy fields when providerProfiles is empty
     {}
   );
 
-  assert.equal(settings.profiles.length, 1);
-  assert.equal(settings.profiles[0].id, "legacy-default");
-  assert.equal(settings.profiles[0].kind, "anthropic");
-  assert.equal(settings.profiles[0].apiKey, "sk-ant-legacy");
-  assert.equal(settings.usedLegacyConfig, true);
+  assert.equal(settings.profiles.length, 0);
+  assert.equal(settings.executionOrder.length, 0);
+  assert.match(settings.warnings.join("\n"), /未配置 commitGenerator\.providerProfiles/);
 });
 
 test("anthropic profile falls back to Claude-style env vars", () => {

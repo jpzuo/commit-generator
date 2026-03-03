@@ -20,9 +20,9 @@
 
 1. 打开一个 Git 仓库工作区。
 2. 将改动加入暂存区（`git add`）。
-3. 在 `settings.json` 配置 `commitGenerator.providerProfiles`（参考下方示例）。
+3. 在 `settings.json` 配置 `commitGenerator.providerProfiles`（必须，参考下方示例）。
 4. 在 Source Control 页面点击 `生成 Commit 信息`，或执行命令 `commitGenerator.generate`。
-5. 如需切换当前配置，执行命令 `commitGenerator.switchProviderProfile`，或点击状态栏中的 `Commit AI: <profile>`。
+5. 如需切换当前配置，执行命令 `commitGenerator.switchProviderProfile`，或点击状态栏中的 `Commit AI: <profile>`；切换结果会写入用户设置 `commitGenerator.activeProfile`，并保留成功提示文案。
 
 入口示意图：
 
@@ -32,8 +32,8 @@
 
 ### 全局配置（`commitGenerator.*`）
 
-- `providerProfiles`: provider 配置列表（核心配置）
-- `activeProfile`（默认 `default`）: 当前优先使用的 profile id
+- `providerProfiles`（必填）: provider 配置列表（核心配置）
+- `activeProfile`（默认 `default`）: 当前优先使用的 profile id；通过状态栏/命令切换时会写入用户设置并持久化
 - `fallbackProfiles`（默认 `[]`）: 回退链 profile id 顺序；为空时自动使用其余 enabled profile
 - `requestTimeoutMs`（默认 `20000`）: 全局请求超时（毫秒）
 - `maxRetries`（默认 `2`）: 可重试错误（429/5xx/超时）的重试次数
@@ -44,6 +44,7 @@
 
 - `requestTimeoutMs` 未配置时会回退读取环境变量 `API_TIMEOUT_MS`
 - `commitGenerator.chineseStyle` 已移除，不再需要配置
+- 旧键 `apiKey/openaiApiKey/apiBaseUrl/apiProtocol/openaiModel` 已停止支持
 
 ### `providerProfiles` 字段
 
@@ -186,12 +187,6 @@
 - Gemini: `GEMINI_API_KEY`、`GEMINI_BASE_URL`、`GEMINI_MODEL`
 - Ollama: `OLLAMA_BASE_URL`、`OLLAMA_MODEL`
 - 全局超时回退: `API_TIMEOUT_MS`
-
-## 旧配置兼容
-
-旧键 `apiKey/openaiApiKey/apiBaseUrl/apiProtocol/openaiModel` 仍可读取。  
-当 `providerProfiles` 为空时，插件会自动把旧键映射为兼容 profile。  
-建议逐步迁移到 `providerProfiles`，以使用回退链和下拉切换能力。
 
 ## 测试与打包
 

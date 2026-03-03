@@ -34,11 +34,6 @@ export interface RawExtensionSettings {
   maxRetries?: unknown;
   logLevel?: unknown;
   logRedactSensitive?: unknown;
-  apiKey?: unknown;
-  openaiApiKey?: unknown;
-  apiBaseUrl?: unknown;
-  apiProtocol?: unknown;
-  openaiModel?: unknown;
 }
 
 export interface ResolvedExtensionSettings {
@@ -50,7 +45,6 @@ export interface ResolvedExtensionSettings {
   maxRetries: number;
   logLevel: LogLevel;
   logRedactSensitive: boolean;
-  usedLegacyConfig: boolean;
   warnings: string[];
 }
 
@@ -65,22 +59,12 @@ export function resolveExtensionSettings(
   const logLevel = parseLogLevel(raw.logLevel);
   const logRedactSensitive = toBoolean(raw.logRedactSensitive, true);
 
-  let profiles = parseProviderProfiles(raw.providerProfiles, {
+  const profiles = parseProviderProfiles(raw.providerProfiles, {
     requestTimeoutMs,
     maxRetries,
     env,
     warnings
   });
-
-  let usedLegacyConfig = false;
-  if (profiles.length === 0) {
-    const hasLegacyValues = hasLegacyConfiguration(raw);
-    profiles = [buildLegacyProfile(raw, env, requestTimeoutMs, maxRetries, hasLegacyValues ? "legacy-default" : "default")];
-    usedLegacyConfig = hasLegacyValues;
-    if (hasLegacyValues) {
-      warnings.push("检测到旧配置键（apiKey/openaiApiKey/apiBaseUrl/apiProtocol/openaiModel），已映射为 profile。");
-    }
-  }
 
   const enabledProfiles = profiles.filter((profile) => profile.enabled);
   const activeProfileSetting = toNonEmptyString(raw.activeProfile) || "default";
@@ -88,11 +72,18 @@ export function resolveExtensionSettings(
   const executionOrder = buildExecutionOrder(enabledProfiles, activeProfileSetting, fallbackProfiles);
   const activeProfile = executionOrder[0]?.id ?? enabledProfiles[0]?.id ?? "";
 
-  if (activeProfileSetting && enabledProfiles.length > 0 && !enabledProfiles.some((profile) => profile.id === activeProfileSetting)) {
+  if (
+    activeProfileSetting &&
+    activeProfileSetting !== "default" &&
+    enabledProfiles.length > 0 &&
+    !enabledProfiles.some((profile) => profile.id === activeProfileSetting)
+  ) {
     warnings.push(`activeProfile="${activeProfileSetting}" 未命中已启用 profile，已自动回退到 "${activeProfile}"。`);
   }
 
-  if (enabledProfiles.length === 0) {
+  if (profiles.length === 0) {
+    warnings.push("未配置 commitGenerator.providerProfiles，AI 生成将直接回退本地规则。");
+  } else if (enabledProfiles.length === 0) {
     warnings.push("当前没有启用的 provider profile，AI 生成将直接回退本地规则。");
   }
 
@@ -105,7 +96,6 @@ export function resolveExtensionSettings(
     maxRetries,
     logLevel,
     logRedactSensitive,
-    usedLegacyConfig,
     warnings
   };
 }
@@ -262,37 +252,6 @@ function parseSingleProfile(
   };
 }
 
-function buildLegacyProfile(
-  raw: RawExtensionSettings,
-  env: NodeJS.ProcessEnv,
-  requestTimeoutMs: number,
-  maxRetries: number,
-  id: string
-): ResolvedProviderProfile {
-  const protocol = parseLegacyProtocol(toNonEmptyString(raw.apiProtocol));
-  const kind = mapLegacyProtocolToKind(protocol);
-  const baseUrl = toNonEmptyString(raw.apiBaseUrl) || defaultBaseUrlForKind(kind, env);
-  const model = toNonEmptyString(raw.openaiModel) || defaultModelForKind(kind, env);
-  const preferredApiKey = toNonEmptyString(raw.apiKey) || toNonEmptyString(raw.openaiApiKey);
-  const apiKey = resolveApiKey(preferredApiKey, "", kind, env);
-
-  return {
-    id,
-    kind,
-    model,
-    baseUrl,
-    apiKey,
-    envKey: defaultEnvKeyForKind(kind),
-    enabled: true,
-    timeoutMs: requestTimeoutMs,
-    maxRetries,
-    extraHeaders: {},
-    azureDeployment: undefined,
-    azureApiVersion: DEFAULT_AZURE_API_VERSION,
-    geminiApiVersion: DEFAULT_GEMINI_API_VERSION
-  };
-}
-
 function resolveApiKey(
   preferred: string,
   envKey: string,
@@ -320,26 +279,6 @@ function parseProviderKind(value: unknown): ProviderKind | undefined {
     return undefined;
   }
   return (PROVIDER_KINDS as string[]).includes(kind) ? (kind as ProviderKind) : undefined;
-}
-
-function parseLegacyProtocol(value: string): "chatCompletions" | "responses" | "anthropicMessages" {
-  if (value === "responses") {
-    return "responses";
-  }
-  if (value === "anthropicMessages") {
-    return "anthropicMessages";
-  }
-  return "chatCompletions";
-}
-
-function mapLegacyProtocolToKind(protocol: "chatCompletions" | "responses" | "anthropicMessages"): ProviderKind {
-  if (protocol === "responses") {
-    return "openaiResponses";
-  }
-  if (protocol === "anthropicMessages") {
-    return "anthropic";
-  }
-  return "openaiCompat";
 }
 
 function shouldShowModelHint(kind: ProviderKind, model: string, baseUrl: string): boolean {
@@ -391,10 +330,6 @@ function defaultModelForKind(kind: ProviderKind, env: NodeJS.ProcessEnv): string
     return toNonEmptyString(env.AZURE_OPENAI_MODEL) || "gpt-4o-mini";
   }
   return toNonEmptyString(env.OPENAI_MODEL) || "gpt-4.1-mini";
-}
-
-function defaultEnvKeyForKind(kind: ProviderKind): string {
-  return defaultEnvKeysForKind(kind)[0] || "";
 }
 
 function defaultEnvKeysForKind(kind: ProviderKind): string[] {
@@ -463,14 +398,4 @@ function clampInt(value: unknown, defaultValue: number, min: number, max: number
     return max;
   }
   return integer;
-}
-
-function hasLegacyConfiguration(raw: RawExtensionSettings): boolean {
-  return Boolean(
-    toNonEmptyString(raw.apiKey) ||
-      toNonEmptyString(raw.openaiApiKey) ||
-      toNonEmptyString(raw.apiBaseUrl) ||
-      toNonEmptyString(raw.apiProtocol) ||
-      toNonEmptyString(raw.openaiModel)
-  );
 }

@@ -2,7 +2,8 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { executeProviderChain, summarizeFailures } from "./ai/executor";
-import { LogLevel, StructuredLogEntry, StructuredLogger } from "./ai/types";
+import { buildAlertFingerprint, collectInvalidProfiles, InvalidProfileAlertMode } from "./ai/invalidProfileDiagnostics";
+import { LogLevel, ProviderFailure, StructuredLogEntry, StructuredLogger } from "./ai/types";
 import { RawExtensionSettings, ResolvedExtensionSettings, resolveExtensionSettings } from "./config/settings";
 
 interface GitRepository {
@@ -27,6 +28,25 @@ interface BuildResult {
   message: string;
   source: MessageSource;
   reason?: string;
+  failureSummary?: string;
+  invalidProfiles: ProviderFailure[];
+  successProfileId?: string;
+}
+
+interface ProviderGenerateResult {
+  message: string;
+  reason?: string;
+  failureSummary?: string;
+  invalidProfiles: ProviderFailure[];
+  successProfileId?: string;
+}
+
+interface InvalidProfileAlertContext {
+  mode: InvalidProfileAlertMode;
+  target: string;
+  ids: string[];
+  invalidProfiles: ProviderFailure[];
+  fingerprint: string;
 }
 
 const MAX_DIFF_CHARS = 12000;
@@ -35,6 +55,9 @@ const INFO_TIMEOUT_MS = 3000;
 const WARN_TIMEOUT_MS = 5000;
 const ERROR_TIMEOUT_MS = 8000;
 const STATUS_BAR_PRIORITY = 100;
+const ACTION_VIEW_DETAILS = "查看详情";
+const ACTION_OPEN_SETTINGS = "打开配置";
+const SHOWN_INVALID_PROFILE_ALERTS = new Set<string>();
 const IGNORED_COMMIT_FILES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -106,6 +129,15 @@ export function activate(context: vscode.ExtensionContext): void {
           output.appendLine(`[result] source=${result.source} message="${result.message}"`);
           if (result.reason) {
             output.appendLine(`[fallback-reason] ${result.reason}`);
+          }
+          if (result.failureSummary && result.failureSummary !== result.reason) {
+            output.appendLine(`[failure-summary] ${result.failureSummary}`);
+          }
+
+          const invalidProfileAlert = buildInvalidProfileAlertContext(result);
+          if (invalidProfileAlert) {
+            logInvalidProfileDiagnostics(invalidProfileAlert);
+            notifyInvalidProfilesIfNeeded(invalidProfileAlert);
           }
         }
       );
@@ -217,7 +249,7 @@ function updateActiveProfileStatusBar(statusBar: vscode.StatusBarItem): void {
 async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
   const context = await collectCommitContext(repoPath);
   if (context.files.length === 0) {
-    return { message: "", source: "fallback", reason: "no_changes" };
+    return { message: "", source: "fallback", reason: "no_changes", invalidProfiles: [] };
   }
 
   try {
@@ -227,20 +259,30 @@ async function buildCommitMessage(repoPath: string): Promise<BuildResult> {
       if (!hasCommitBody(aiMessage)) {
         aiMessage = `${aiMessage}\n\n${buildDetailedBody(context.files, context.diff)}`;
       }
-      return { message: aiMessage, source: "ai" };
+      return {
+        message: aiMessage,
+        source: "ai",
+        failureSummary: aiResult.failureSummary,
+        invalidProfiles: aiResult.invalidProfiles,
+        successProfileId: aiResult.successProfileId
+      };
     }
 
     return {
       message: buildRuleBasedMessage(context.files, context.diff),
       source: "fallback",
-      reason: aiResult.reason ?? "ai_empty_or_invalid"
+      reason: aiResult.reason ?? "ai_empty_or_invalid",
+      failureSummary: aiResult.failureSummary,
+      invalidProfiles: aiResult.invalidProfiles,
+      successProfileId: aiResult.successProfileId
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     return {
       message: buildRuleBasedMessage(context.files, context.diff),
       source: "fallback",
-      reason: `ai_error: ${detail}`
+      reason: `ai_error: ${detail}`,
+      invalidProfiles: []
     };
   }
 }
@@ -265,14 +307,15 @@ function isIgnoredCommitFile(file: string): boolean {
   return IGNORED_COMMIT_FILES.has(name);
 }
 
-async function generateWithProviders(context: CommitContext): Promise<{ message: string; reason?: string }> {
+async function generateWithProviders(context: CommitContext): Promise<ProviderGenerateResult> {
   const settings = loadResolvedSettings();
   logSettingsDiagnostics(settings);
 
   if (settings.executionOrder.length === 0) {
     return {
       message: "",
-      reason: "no_enabled_profiles"
+      reason: "no_enabled_profiles",
+      invalidProfiles: []
     };
   }
 
@@ -288,15 +331,25 @@ async function generateWithProviders(context: CommitContext): Promise<{ message:
   );
 
   if (result.success) {
+    const failureSummary = summarizeFailures(result.failures) || undefined;
+    const invalidProfiles = collectInvalidProfiles(result.failures, result.success.profileId);
     output.appendLine(
       `[ai-success] provider=${result.success.provider} profile=${result.success.profileId} endpoint=${result.success.endpoint} latencyMs=${result.success.latencyMs}`
     );
-    return { message: result.success.message };
+    return {
+      message: result.success.message,
+      failureSummary,
+      invalidProfiles,
+      successProfileId: result.success.profileId
+    };
   }
 
+  const failureSummary = summarizeFailures(result.failures) || "all_providers_failed";
   return {
     message: "",
-    reason: summarizeFailures(result.failures) || "all_providers_failed"
+    reason: failureSummary,
+    failureSummary,
+    invalidProfiles: collectInvalidProfiles(result.failures)
   };
 }
 
@@ -328,6 +381,83 @@ function logSettingsDiagnostics(settings: ResolvedExtensionSettings): void {
   output.appendLine(
     `[config] logLevel=${settings.logLevel} logRedactSensitive=${String(settings.logRedactSensitive)}`
   );
+}
+
+function buildInvalidProfileAlertContext(result: BuildResult): InvalidProfileAlertContext | undefined {
+  if (result.invalidProfiles.length === 0) {
+    return undefined;
+  }
+
+  let mode: InvalidProfileAlertMode;
+  let target: string;
+  if (result.source === "ai" && result.successProfileId) {
+    mode = "switched";
+    target = result.successProfileId;
+  } else if (result.source === "fallback") {
+    mode = "all_failed";
+    target = "local";
+  } else {
+    return undefined;
+  }
+
+  const ids = [...new Set(result.invalidProfiles.map((failure) => failure.profileId))].sort();
+  if (ids.length === 0) {
+    return undefined;
+  }
+
+  return {
+    mode,
+    target,
+    ids,
+    invalidProfiles: result.invalidProfiles,
+    fingerprint: buildAlertFingerprint(mode, result.invalidProfiles)
+  };
+}
+
+function logInvalidProfileDiagnostics(context: InvalidProfileAlertContext): void {
+  output.appendLine(
+    `[warn] [invalid-profiles] mode=${context.mode} target=${context.target} ids=${context.ids.join(",")}`
+  );
+  for (const failure of context.invalidProfiles) {
+    const statusText = typeof failure.status === "number" ? String(failure.status) : "unknown";
+    output.appendLine(
+      `[warn] [invalid-profile] id=${failure.profileId} provider=${failure.provider} status=${statusText} error=${sanitizeInline(failure.error)}`
+    );
+  }
+}
+
+function notifyInvalidProfilesIfNeeded(context: InvalidProfileAlertContext): void {
+  if (SHOWN_INVALID_PROFILE_ALERTS.has(context.fingerprint)) {
+    return;
+  }
+  SHOWN_INVALID_PROFILE_ALERTS.add(context.fingerprint);
+
+  const profileText = formatProfileList(context.ids);
+  const message =
+    context.mode === "switched"
+      ? `检测到失效配置（${profileText}），已切换到 ${context.target} 继续生成。`
+      : `检测到失效配置（${profileText}），已回退本地规则生成。`;
+
+  void vscode.window.showWarningMessage(message, ACTION_VIEW_DETAILS, ACTION_OPEN_SETTINGS).then(async (action) => {
+    if (action === ACTION_VIEW_DETAILS) {
+      output.show(true);
+      return;
+    }
+    if (action === ACTION_OPEN_SETTINGS) {
+      await vscode.commands.executeCommand("workbench.action.openSettings", "commitGenerator.providerProfiles");
+    }
+  });
+}
+
+function formatProfileList(ids: string[]): string {
+  if (ids.length <= 3) {
+    return ids.join("、");
+  }
+  return `${ids.slice(0, 3).join("、")} 等${ids.length}个`;
+}
+
+function sanitizeInline(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function createStructuredLogger(logLevel: LogLevel, redactSensitive: boolean): StructuredLogger {

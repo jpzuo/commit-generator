@@ -202,16 +202,15 @@ npm test
 npm run smoke:providers
 ```
 
-打包：
+打包（自动升级版本、生成 VSIX、提交版本 commit、创建并推送分支与 tag）：
 
 ```powershell
 npm run release
 ```
 
-macOS/Linux 打包（自动升级版本、生成 VSIX、创建并推送 tag）：
+macOS/Linux 打包（默认升级 patch）：
 
 ```bash
-# 默认升级 patch
 npm run release:mac
 
 # 指定升级 minor/major
@@ -221,6 +220,8 @@ bash ./scripts/release.sh major
 # 指定版本号
 bash ./scripts/release.sh --version 0.2.0
 ```
+
+发布脚本会校验 Git 工作区（tracked 文件）必须是干净状态，避免把无关改动带入发布提交。
 
 ## 问题反馈
 

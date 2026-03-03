@@ -19,8 +19,9 @@ Behavior:
   1) Bump package.json version (without npm git tag)
   2) Compile extension
   3) Package VSIX
-  4) Create git annotated tag: v<version>
-  5) Push tag to remote: origin
+  4) Commit version files (package.json/package-lock.json)
+  5) Create git annotated tag: v<version>
+  6) Push current branch and tag to remote: origin
 EOF
 }
 
@@ -68,6 +69,23 @@ if [[ ! -f package.json ]]; then
   exit 1
 fi
 
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "Error: current directory is not a git repository." >&2
+  exit 1
+fi
+
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Error: git working tree has tracked changes. Commit or stash first." >&2
+  git status --short
+  exit 1
+fi
+
+current_branch="$(git rev-parse --abbrev-ref HEAD)"
+if [[ "$current_branch" == "HEAD" ]]; then
+  echo "Error: detached HEAD is not supported for release." >&2
+  exit 1
+fi
+
 if [[ -n "$version" ]]; then
   run_step npm version "$version" --no-git-tag-version
 else
@@ -98,10 +116,25 @@ if git rev-parse -q --verify "refs/tags/${tag_name}" >/dev/null; then
   exit 1
 fi
 
+version_files=(package.json)
+if [[ -f package-lock.json ]]; then
+  version_files+=(package-lock.json)
+fi
+run_step git add "${version_files[@]}"
+
+if git diff --cached --quiet; then
+  echo "Error: no version file changes to commit." >&2
+  exit 1
+fi
+
+run_step git commit -m "chore(release): ${tag_name}"
 run_step git tag -a "$tag_name" -m "release $tag_name"
+run_step git push origin "$current_branch"
 run_step git push origin "$tag_name"
 
 echo "Tag created: $tag_name"
+echo "Version commit created: chore(release): ${tag_name}"
+echo "Branch pushed: $current_branch (origin)"
 echo "Tag pushed: $tag_name (origin)"
 echo "Package completed: version $package_version"
 echo "VSIX: $vsix_path"
